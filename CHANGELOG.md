@@ -14,6 +14,17 @@ All notable changes to this project are documented here. The format follows
   writers) and by count (default the newest 31 of the provider's own files, never the one being written). Lines are
   written whole under one lock and flushed; the file is shared for reading while it grows; entries after `Dispose`
   are dropped. `AddRollingFile(directory, filePrefix, configure)` registers it; the clock is a `TimeProvider`.
+- `DesktopHost.Processes`: `ProcessSupervisor` — runs a long-lived child through a ChildProcessGuard `ProcessGuardian`
+  (a job object on Windows, a process group elsewhere, so the tree ends with the host; one guardian may serve every
+  supervisor of a host and is not disposed when it was passed in). The command is resolved at every start and names the
+  child's whole environment (`SupervisedCommand.SafeEnvironment()` to start from; `SplitCommandLine` for a one-string
+  command). A `Ready` hook binds the child's input and output and returns when it is ready, within `ReadyTimeout`
+  (60 s). An unexpected exit — or a start that never became ready — is retried after each of `RestartPolicy.Delays`
+  (2 s, 8 s, 32 s); a run that lasted `StableAfter` (2 min) starts the count over; `IsPermanentExit` gives up at once
+  (`ExitCodes.IsUnhandledManagedException` for `0xE0434352`). Stop: the caller's `GracefulStop` step and
+  `GracefulTimeout` (5 s), optionally the main window's close, then the guardian's tree kill. A replaced or stopped
+  process never schedules a restart. State, `LastError`, restart and unexpected-exit counts, the last standard-error
+  lines; `StateChanged`, `Exited`, `GaveUp` and `StderrLine` are raised outside the supervisor's lock.
 
 ## [0.1.0] - 2026-10-17
 

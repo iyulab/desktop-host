@@ -2,9 +2,12 @@
   <Folder Name="/src/">
     <Project Path="src/DesktopHost.Files/DesktopHost.Files.csproj" />
     <Project Path="src/DesktopHost.Logging/DesktopHost.Logging.csproj" />
+    <Project Path="src/DesktopHost.Processes/DesktopHost.Processes.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/DesktopHost.Files.Tests/DesktopHost.Files.Tests.csproj" />
     <Project Path="tests/DesktopHost.Logging.Tests/DesktopHost.Logging.Tests.csproj" />
+    <Project Path="tests/DesktopHost.Processes.TestChild/DesktopHost.Processes.TestChild.csproj" />
+    <Project Path="tests/DesktopHost.Processes.Tests/DesktopHost.Processes.Tests.csproj" />
   </Folder>
 </Solution>

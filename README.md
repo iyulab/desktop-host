@@ -12,7 +12,7 @@ quiet ways:
 - **The processes it starts** — workers and helpers that start, report ready, restart within
   limits and never outlive it
 
-**Status:** `DesktopHost.Files` 0.1.0 is on NuGet; `DesktopHost.Logging` is in the repository for the next version.
+**Status:** `DesktopHost.Files` 0.1.0 is on NuGet; `DesktopHost.Logging` and `DesktopHost.Processes` are in the repository for the next version.
 See [SCOPE.md](SCOPE.md) for what belongs here.
 
 ## Packages
@@ -59,6 +59,35 @@ builder.Logging.AddRollingFile(logDirectory, "host");
 
 // Each worker writes its own file; any of them clears the old files of all.
 builder.Logging.AddRollingFile(logDirectory, $"worker-{id}", o => o.RetentionPrefix = "worker");
+```
+
+### DesktopHost.Processes
+
+Supervision of the long-lived processes a host starts — on top of [ChildProcessGuard](https://www.nuget.org/packages/ChildProcessGuard),
+which keeps them from outliving the host.
+
+- `ProcessSupervisor` — start, wait until ready, start again after an unexpected exit within limits, stop the child's
+  own way before killing its whole tree. A process replaced on request or stopped never triggers a restart; events are
+  raised outside the supervisor's lock, so a handler can call back in.
+- `ProcessSupervisorOptions` — `Command` (resolved at each start; the child gets only the environment it names), `Ready` +
+  `ReadyTimeout`, `RestartPolicy` (`Delays`, `StableAfter`, `IsPermanentExit`), `StopPolicy` (`GracefulStop`,
+  `GracefulTimeout`, `CloseMainWindow`), `Guardian` (share one per host), `Logger`, `StderrTailLines`.
+
+```csharp
+using DesktopHost.Processes;
+
+var env = SupervisedCommand.SafeEnvironment();
+env["WORKER_PORT"] = port.ToString();
+
+await using var worker = new ProcessSupervisor(new ProcessSupervisorOptions
+{
+    Name = "worker",
+    Guardian = guardian, // one per host
+    Command = () => new SupervisedCommand(workerPath, ["--serve"], env),
+    Ready = async (process, ct) => await WaitForHelloAsync(process.StandardOutput, ct),
+    Stop = { GracefulStop = (process, ct) => process.StandardInput.WriteLineAsync("quit".AsMemory(), ct) },
+});
+await worker.StartAsync();
 ```
 
 ## License
