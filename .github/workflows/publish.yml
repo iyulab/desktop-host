@@ -1,0 +1,86 @@
+name: Publish to NuGet
+
+# Runs only when the declared version changes (or by hand). A version that already has a tag is skipped,
+# so re-running is safe.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Directory.Build.props'
+      - '.github/workflows/publish.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write   # push the version tag
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Read version from Directory.Build.props
+      id: version
+      run: |
+        VERSION=$(grep -oP '<Version>\K[^<]+' Directory.Build.props)
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "Version: $VERSION"
+
+    - name: Skip if the version is already tagged
+      id: check_tag
+      run: |
+        if git ls-remote --tags origin "v${{ steps.version.outputs.version }}" | grep -q .; then
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "v${{ steps.version.outputs.version }} already exists — nothing to publish"
+        else
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Setup .NET
+      if: steps.check_tag.outputs.exists == 'false'
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Build
+      if: steps.check_tag.outputs.exists == 'false'
+      run: dotnet build DesktopHost.slnx --configuration Release
+
+    - name: Test
+      if: steps.check_tag.outputs.exists == 'false'
+      run: dotnet test --solution DesktopHost.slnx --no-build --configuration Release
+
+    # Pack the whole solution rather than naming projects, then check every packable project produced
+    # its package — a package that is never produced cannot fail to push, so the gap would stay silent.
+    - name: Pack
+      if: steps.check_tag.outputs.exists == 'false'
+      run: dotnet pack DesktopHost.slnx --no-build --configuration Release --output ./nupkg
+
+    - name: Verify every packable project was produced
+      if: steps.check_tag.outputs.exists == 'false'
+      run: |
+        version="${{ steps.version.outputs.version }}"
+        missing=0
+        for csproj in $(grep -oP '(?<=Path=")src/[^"]+\.csproj' DesktopHost.slnx); do
+          id=$(grep -oP '(?<=<PackageId>)[^<]+' "$csproj" || basename "$csproj" .csproj)
+          if [ ! -f "./nupkg/${id}.${version}.nupkg" ]; then
+            echo "::error::${id}.${version}.nupkg was not produced"
+            missing=1
+          fi
+        done
+        [ "$missing" -eq 0 ]
+
+    - name: Push to NuGet
+      if: steps.check_tag.outputs.exists == 'false'
+      run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+    - name: Tag the version
+      if: steps.check_tag.outputs.exists == 'false'
+      run: |
+        git tag "v${{ steps.version.outputs.version }}"
+        git push origin "v${{ steps.version.outputs.version }}"
