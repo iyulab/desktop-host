@@ -12,7 +12,7 @@ quiet ways:
 - **The processes it starts** — workers and helpers that start, report ready, restart within
   limits and never outlive it
 
-**Status:** `DesktopHost.Files` 0.1.0 is on NuGet; `DesktopHost.Logging` and `DesktopHost.Processes` are in the repository for the next version.
+**Status:** 0.2.0 — `DesktopHost.Files`, `DesktopHost.Logging` and `DesktopHost.Processes` on NuGet.
 See [SCOPE.md](SCOPE.md) for what belongs here.
 
 ## Packages
