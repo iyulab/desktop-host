@@ -12,7 +12,7 @@ quiet ways:
 - **The processes it starts** — workers and helpers that start, report ready, restart within
   limits and never outlive it
 
-**Status:** no package is published yet; the first one, `DesktopHost.Files`, is in the repository at 0.1.0.
+**Status:** `DesktopHost.Files` 0.1.0 is on NuGet; `DesktopHost.Logging` is in the repository for the next version.
 See [SCOPE.md](SCOPE.md) for what belongs here.
 
 ## Packages
@@ -39,6 +39,26 @@ string? text = await AtomicFile.ReadAllTextSharedIfExistsAsync(path);
 
 // Outlasts a scanner holding a just-extracted file.
 FileRetry.MoveDirectory(staging, target, logger);
+```
+
+### DesktopHost.Logging
+
+A file log for `Microsoft.Extensions.Logging` that rotates and never fills the disk.
+
+- `RollingFileLoggerProvider` — `{prefix}-{yyyy-MM-dd}.log` per UTC day, continued in `{prefix}-{yyyy-MM-dd}.1.log`, `.2.log`
+  … at a size limit; old files removed by age and by count whenever a file is opened. Lines from any thread come out
+  whole; another process can read the file as it grows; entries after shutdown are dropped rather than thrown.
+- `RollingFileLoggerOptions` — directory and prefix (required), `RetentionPrefix` (clear the old files of several writers
+  that share a prefix), `RetainedFileTimeLimit` (7 days), `RetainedFileCountLimit` (31), `FileSizeLimitBytes` (64 MiB),
+  `TimeProvider`.
+
+```csharp
+using DesktopHost.Logging;
+
+builder.Logging.AddRollingFile(logDirectory, "host");
+
+// Each worker writes its own file; any of them clears the old files of all.
+builder.Logging.AddRollingFile(logDirectory, $"worker-{id}", o => o.RetentionPrefix = "worker");
 ```
 
 ## License
