@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `DesktopHost.Files`: `Trash.Move(path)` — moves a file or folder to the platform's trash so it can be restored. Windows:
+  the shell's `IFileOperation` (the operation File Explorer runs) with every dialog suppressed, on a single-threaded
+  apartment of its own, through source-generated COM (the package stays AOT-compatible); a progress sink refuses any
+  deletion the shell would not recycle, so an item too large for the Recycle Bin, or on a drive without one, stays where
+  it is instead of being deleted, and `TrashException` (`Reason` `not_recyclable` or `refused`) says why. Linux: the
+  freedesktop.org Trash specification's home trash (`$XDG_DATA_HOME/Trash`, a `.trashinfo` record with the percent-encoded
+  original path and the time, a numbered name when one is taken). macOS: `PlatformNotSupportedException` for now.
+
 ## [0.2.0] - 2026-10-17
 
 ### Added

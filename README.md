@@ -27,6 +27,9 @@ Durable file writes and the reads that go with them.
   `ReadLinesShared`, and `…IfExists` forms that answer "absent" only for a missing file) never block such a write.
 - `FileRetry` — delete or move a file or directory through the seconds a virus scanner or sync client holds it.
 - `FileLockHolders` — name the processes holding a file open (Windows Restart Manager; empty elsewhere).
+- `Trash` — move a file or folder to the Recycle Bin (Windows, the shell's own operation with no dialogs) or the
+  freedesktop.org home trash (Linux), so the person can restore it. It never deletes: an item the platform would not keep
+  in its bin — too large, a drive without one — stays where it is and `TrashException` says why.
 
 ```csharp
 using DesktopHost.Files;
@@ -39,6 +42,9 @@ string? text = await AtomicFile.ReadAllTextSharedIfExistsAsync(path);
 
 // Outlasts a scanner holding a just-extracted file.
 FileRetry.MoveDirectory(staging, target, logger);
+
+// Restorable from the Recycle Bin; never a permanent delete.
+Trash.Move(path);
 ```
 
 ### DesktopHost.Logging
