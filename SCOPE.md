@@ -14,6 +14,8 @@ alone:**
 - **Logging** — a rotating file log for `Microsoft.Extensions.Logging`, bounded in size and count
 - **Child processes** — starting workers and helpers, waiting until they are ready, restarting
   them within a limit, and stopping the whole tree, including on Windows when the host itself dies
+- **What it runs** — whether a program the host downloaded or is about to start carries a valid
+  code signature from the publisher it expects
 
 One capability per package, so a host takes only what it needs. All packages share one version.
 

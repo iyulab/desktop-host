@@ -11,8 +11,11 @@ quiet ways:
 - **Its own log** — a file log that rotates and never fills the disk
 - **The processes it starts** — workers and helpers that start, report ready, restart within
   limits and never outlive it
+- **What it runs** — a program it downloaded, checked for its publisher's signature before it is
+  started
 
-**Status:** 0.3.0 — `DesktopHost.Files`, `DesktopHost.Logging` and `DesktopHost.Processes` on NuGet.
+**Status:** 0.3.0 — `DesktopHost.Files`, `DesktopHost.Logging` and `DesktopHost.Processes` on NuGet;
+`DesktopHost.Signatures` is unreleased (on `main`).
 See [SCOPE.md](SCOPE.md) for what belongs here.
 
 ## Packages
@@ -94,6 +97,33 @@ await using var worker = new ProcessSupervisor(new ProcessSupervisorOptions
     Stop = { GracefulStop = (process, ct) => process.StandardInput.WriteLineAsync("quit".AsMemory(), ct) },
 });
 await worker.StartAsync();
+```
+
+### DesktopHost.Signatures
+
+Whether a file the host is about to run — an update it downloaded, a helper, a plugin's program — comes from the
+publisher it expects.
+
+- `Authenticode.Verify(path, publishers)` — checks the file's embedded Authenticode signature the way Windows checks a
+  program (`WinVerifyTrust`: the content unchanged since signing, a chain to a trusted root, a certificate issued for code
+  signing and valid when signed), then matches the subject of the certificate that check verified against the expected
+  publishers. `SignatureCheck.Verdict`: `Trusted`, `NotSigned`, `Invalid`, `UnexpectedPublisher`, or `Unsupported` off
+  Windows (nothing checked — the caller decides what that means there).
+- `Publisher` — names a publisher by its certificate subject: the organization (`O`), and optionally the country, the
+  registration number an extended-validation certificate carries (`serialNumber`) and the common name — each compared
+  exactly. A subject survives a certificate's renewal, so a pin on it keeps passing when the certificate (and its
+  thumbprint) is replaced; a thumbprint pin would fail on the first file signed after a renewal.
+- Offline by design: revocation is not checked and nothing is fetched to build the chain, so a computer without a
+  connection still verifies what it downloaded through another path. A certificate revoked after a file was signed still
+  passes this check.
+
+```csharp
+using DesktopHost.Signatures;
+
+var publisher = new Publisher("Example Software Ltd") { Country = "US", SerialNumber = "1234567" };
+var check = Authenticode.Verify(downloadedExe, [publisher]);
+if (!check.IsTrusted)
+    throw new InvalidOperationException($"refusing {downloadedExe}: {check}");
 ```
 
 ## License

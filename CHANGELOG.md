@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `DesktopHost.Signatures` (new package): `Authenticode.Verify(path, publishers)` — whether a file the host is about to run
+  carries a valid embedded Authenticode signature (`WinVerifyTrust`, generic verify: content unchanged, chain to a trusted
+  root, code-signing certificate valid when signed) from one of the expected publishers. The signer is the certificate the
+  verification trusted, matched by `Publisher` on its subject — organization, and optionally country, an extended-validation
+  certificate's registration number and common name, each exactly — so a renewed certificate keeps passing and a valid
+  signature from anyone else is `UnexpectedPublisher`. Offline: no revocation check and no fetching while building the
+  chain. `SignatureCheck.Verdict` is `Trusted`, `NotSigned` (also a file kind that carries no signature, or one covered only
+  by a catalog), `Invalid`, `UnexpectedPublisher`, or `Unsupported` off Windows. AOT-compatible (source-generated interop).
+
 ## [0.3.0] - 2026-10-20
 
 ### Added

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Whether a file a local .NET host is about to run comes from the publisher it expects: a valid Authenticode signature checked the way Windows checks it (WinVerifyTrust, offline), and the verified signer's certificate subject matched against the publishers the caller names — so a renewed certificate keeps passing and a validly signed file from anyone else does not.</Description>
+    <PackageTags>authenticode;code-signing;signature;wintrust;update;publisher;desktop</PackageTags>
+    <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IsAotCompatible>true</IsAotCompatible>
+    <!-- Source-generated interop (LibraryImport) for WinVerifyTrust. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <InternalsVisibleTo Include="DesktopHost.Signatures.Tests" />
+  </ItemGroup>
+
+</Project>
