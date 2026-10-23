@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>What a long-running local .NET host can say about its own health: a monitor, on a thread of its own, that notices when the thread pool stops starting work and reports how long it waited and how deep the queue was — the signal a slow-but-alive host otherwise never gives before it is restarted.</Description>
+    <PackageTags>thread-pool;starvation;stall;diagnostics;watchdog;desktop</PackageTags>
+    <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DesktopHost.Diagnostics.Tests" />
+  </ItemGroup>
+
+</Project>

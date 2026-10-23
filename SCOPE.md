@@ -16,6 +16,8 @@ alone:**
   them within a limit, and stopping the whole tree, including on Windows when the host itself dies
 - **What it runs** — whether a program the host downloaded or is about to start carries a valid
   code signature from the publisher it expects
+- **Its own health** — whether the process can still run work: noticing when its thread pool
+  stops starting work items, and saying how long and how deep, from a thread the stall cannot reach
 
 One capability per package, so a host takes only what it needs. All packages share one version.
 

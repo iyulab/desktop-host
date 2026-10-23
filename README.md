@@ -13,12 +13,39 @@ quiet ways:
   limits and never outlive it
 - **What it runs** — a program it downloaded, checked for its publisher's signature before it is
   started
+- **Its own health** — noticing when its thread pool stops starting work, the state in which it
+  answers nothing yet looks alive to itself
 
 **Status:** 0.3.0 — `DesktopHost.Files`, `DesktopHost.Logging` and `DesktopHost.Processes` on NuGet;
-`DesktopHost.Signatures` is unreleased (on `main`).
+`DesktopHost.Signatures` and `DesktopHost.Diagnostics` are unreleased (on `main`).
 See [SCOPE.md](SCOPE.md) for what belongs here.
 
 ## Packages
+
+### DesktopHost.Diagnostics
+
+What the host can say about its own health.
+
+- `ThreadPoolStallMonitor` — on a thread of its own (so a starved pool cannot starve it), queues one small work item every
+  `Interval` and waits for it to start. One that has not started within `Threshold` is a stall: logged with the pool's
+  queue and thread count, and logged again with its length when the work item finally runs. `StallStarted` and
+  `StallEnded` hand the same facts to the host (`ThreadPoolStallStarted`, `ThreadPoolStall` with the worst
+  `ThreadPoolSnapshot` seen), on the monitor's thread.
+- Why it matters: past its minimum, the pool adds threads only slowly (about two a second), so a burst of blocking work —
+  a synchronous wait on a task, a long synchronous walk on a request thread — delays every queued item behind it, request
+  handlers and health endpoints included. Set `Threshold` to what an outside watcher tolerates (a supervisor's health-check
+  timeout) and the host says so before it is restarted for being silent.
+
+```csharp
+using DesktopHost.Diagnostics;
+
+using var monitor = new ThreadPoolStallMonitor(new ThreadPoolStallMonitorOptions
+{
+    Threshold = TimeSpan.FromSeconds(5),
+    StallEnded = stall => metrics.Record("pool_stall_ms", stall.Duration.TotalMilliseconds),
+}, logger);
+monitor.Start();
+```
 
 ### DesktopHost.Files
 

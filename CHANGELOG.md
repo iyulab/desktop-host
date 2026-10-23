@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `DesktopHost.Diagnostics` (new package): `ThreadPoolStallMonitor` — notices when the thread pool stops starting work.
+  On a dedicated background thread it queues one work item every `Interval` (default 1 s); one that has not started within
+  `Threshold` (default 1 s) is a stall, logged with `ThreadPool.PendingWorkItemCount`, the thread count and the minimum,
+  and logged again with its length when the item runs. `StallStarted` / `StallEnded` callbacks receive
+  `ThreadPoolStallStarted` and `ThreadPoolStall` (duration, the deepest queue and most threads seen), on the monitor's
+  thread; an exception from one is logged and the monitor goes on. A stall still going on at `Dispose` is not reported as
+  ended.
 - `DesktopHost.Signatures` (new package): `Authenticode.Verify(path, publishers)` — whether a file the host is about to run
   carries a valid embedded Authenticode signature (`WinVerifyTrust`, generic verify: content unchanged, chain to a trusted
   root, code-signing certificate valid when signed) from one of the expected publishers. The signer is the certificate the
