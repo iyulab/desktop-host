@@ -55,7 +55,10 @@ Durable file writes and the reads that go with them.
   temp sibling, flush to disk, one atomic rename (a POSIX-semantics rename on Windows), retried for about two seconds
   through brief locks, with an exception that names who held the file. Shared reads (`ReadAllTextShared`,
   `ReadLinesShared`, and `…IfExists` forms that answer "absent" only for a missing file) never block such a write.
-- `FileRetry` — delete or move a file or directory through the seconds a virus scanner or sync client holds it.
+- `FileRetry` — delete or move a file or directory through the seconds a virus scanner or sync client holds it. The
+  retry is a window (`FileRetryOptions.Patience`, 25 s by default): a refusal that ends within it is outlasted, the last
+  attempt is made when it closes, nothing waits past it. The Tauri kit's file crate retries by the same rule, and both run
+  one case table (`tests/DesktopHost.Files.Tests/cases/file-retry.json`).
 - `FileLockHolders` — name the processes holding a file open (Windows Restart Manager; empty elsewhere).
 - `Trash` — move a file or folder to the Recycle Bin (Windows, the shell's own operation with no dialogs) or the
   freedesktop.org home trash (Linux), so the person can restore it. It never deletes: an item the platform would not keep
@@ -108,6 +111,10 @@ which keeps them from outliving the host.
 - `ProcessSupervisorOptions` — `Command` (resolved at each start; the child gets only the environment it names), `Ready` +
   `ReadyTimeout`, `RestartPolicy` (`Delays`, `StableAfter`, `IsPermanentExit`), `StopPolicy` (`GracefulStop`,
   `GracefulTimeout`, `CloseMainWindow`), `Guardian` (share one per host), `Logger`, `StderrTailLines`.
+- The words differ from a shell kit's on purpose. `RestartPolicy` here is a ladder of growing pauses (2 s, 8 s, 32 s) that
+  starts over after a run lasting `StableAfter` — the policy for a host's own workers. A shell supervising the host itself
+  (the Tauri kit's sidecar `RestartPolicy`) allows a number of starts within a window and then stays down, with no growing
+  pause and no reset; an app using both should not read «restarts» as one rule.
 
 ```csharp
 using DesktopHost.Processes;

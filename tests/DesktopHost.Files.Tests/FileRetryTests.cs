@@ -105,14 +105,14 @@ public sealed class FileRetryTests : IDisposable
     }
 
     [Fact]
-    public void A_single_attempt_budget_lets_the_lock_failure_propagate()
+    public void No_patience_lets_the_lock_failure_propagate()
     {
         // Windows only: an open handle does not refuse unlink(2) elsewhere.
         if (!OperatingSystem.IsWindows()) return;
         var path = Path.Combine(_root, "held.bin");
         File.WriteAllText(path, "x");
         using var handle = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
-        var once = FileRetryOptions.Default with { MaxAttempts = 1 };
+        var once = FileRetryOptions.Default with { Patience = TimeSpan.Zero };
 
         Assert.ThrowsAny<IOException>(() => FileRetry.DeleteFile(path, _logger, once));
         Assert.False(FileRetry.TryDeleteFile(path, _logger, retry: true, options: once));
@@ -120,9 +120,9 @@ public sealed class FileRetryTests : IDisposable
     }
 
     [Fact]
-    public void A_budget_below_one_attempt_is_refused()
+    public void A_negative_patience_is_refused()
     {
-        var none = FileRetryOptions.Default with { MaxAttempts = 0 };
+        var none = FileRetryOptions.Default with { Patience = TimeSpan.FromMilliseconds(-1) };
 
         Assert.Throws<ArgumentOutOfRangeException>(() => FileRetry.DeleteFile(Path.Combine(_root, "x"), _logger, none));
     }

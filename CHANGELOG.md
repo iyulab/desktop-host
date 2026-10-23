@@ -6,8 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `DesktopHost.Files`: `FileRetry` retries within a window instead of a number of attempts — `FileRetryOptions(Patience,
+  PauseStep, MaxPause)` replaces `(MaxAttempts, DelayStep, MaxDelay)`; default a 25 s window with pauses of 1 s, 2 s, 3 s …
+  capped at 3 s (the old default, ten attempts with the same pauses, came to about 24 s). A refusal that ends within the
+  window is outlasted, the last attempt is made when the window closes (a pause that would cross it is cut short), and
+  nothing waits past it; `Patience` zero is one attempt. The retry log line names the window. Migration: replace
+  `MaxAttempts = n` with the `Patience` you mean; `MaxAttempts = 1` is `Patience = TimeSpan.Zero`.
+
 ### Added
 
+- `DesktopHost.Files` tests: the file-retry window's case table shared with the Tauri kit's file crate
+  (`cases/file-retry.json`, identical in both repositories), run under three pause steps; the README says how the two
+  kits' supervision words differ on purpose.
 - `DesktopHost.Diagnostics` (new package): `ThreadPoolStallMonitor` — notices when the thread pool stops starting work.
   On a dedicated background thread it queues one work item every `Interval` (default 1 s); one that has not started within
   `Threshold` (default 1 s) is a stall, logged with `ThreadPool.PendingWorkItemCount`, the thread count and the minimum,

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace DesktopHost.Files;
@@ -6,28 +7,30 @@ namespace DesktopHost.Files;
 /// How long <see cref="FileRetry"/> keeps trying an operation that a transient lock refuses.
 /// </summary>
 /// <remarks>
-/// The defaults — 10 attempts, waiting 1 s, 2 s, 3 s, 3 s … between them, about 25 s in all — outlast the 10–20 s a
-/// virus scanner can hold a just-written, just-moved or just-extracted file while it scans it.
+/// The retry is a window, not a count: a refusal that ends within <paramref name="Patience"/> of the first attempt is
+/// outlasted, the last attempt is made when the window closes (a pause that would cross it is cut short), and nothing waits
+/// past it. The defaults — 25 s, pausing 1 s, 2 s, 3 s, 3 s … between attempts — outlast the 10–20 s a virus scanner can hold
+/// a just-written, just-moved or just-extracted file while it scans it.
 /// </remarks>
-/// <param name="MaxAttempts">How many times the operation runs in all; the last attempt's failure propagates. At least 1.</param>
-/// <param name="DelayStep">The wait after the first failed attempt; the n-th wait is n times this, up to <paramref name="MaxDelay"/>.</param>
-/// <param name="MaxDelay">The longest single wait between attempts.</param>
-public sealed record FileRetryOptions(int MaxAttempts, TimeSpan DelayStep, TimeSpan MaxDelay)
+/// <param name="Patience">How long from the first attempt a transient refusal is tried again. Zero means one attempt.</param>
+/// <param name="PauseStep">The pause after the first refusal; the n-th pause is n times this, up to <paramref name="MaxPause"/>.</param>
+/// <param name="MaxPause">The longest single pause between attempts.</param>
+public sealed record FileRetryOptions(TimeSpan Patience, TimeSpan PauseStep, TimeSpan MaxPause)
 {
-    /// <summary>10 attempts, waits of 1 s, 2 s, 3 s … capped at 3 s.</summary>
-    public static FileRetryOptions Default { get; } = new(10, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3));
+    /// <summary>A 25 s window, pauses of 1 s, 2 s, 3 s … capped at 3 s.</summary>
+    public static FileRetryOptions Default { get; } = new(TimeSpan.FromSeconds(25), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3));
 
-    internal TimeSpan DelayAfter(int attempt)
+    internal TimeSpan PauseAfter(int attempt)
     {
-        var delay = DelayStep * attempt;
-        return delay < MaxDelay ? delay : MaxDelay;
+        var pause = PauseStep * attempt;
+        return pause < MaxPause ? pause : MaxPause;
     }
 
     internal void Validate()
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(MaxAttempts, 1, nameof(MaxAttempts));
-        ArgumentOutOfRangeException.ThrowIfLessThan(DelayStep, TimeSpan.Zero, nameof(DelayStep));
-        ArgumentOutOfRangeException.ThrowIfLessThan(MaxDelay, TimeSpan.Zero, nameof(MaxDelay));
+        ArgumentOutOfRangeException.ThrowIfLessThan(Patience, TimeSpan.Zero, nameof(Patience));
+        ArgumentOutOfRangeException.ThrowIfLessThan(PauseStep, TimeSpan.Zero, nameof(PauseStep));
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaxPause, TimeSpan.Zero, nameof(MaxPause));
     }
 }
 
@@ -43,8 +46,8 @@ public sealed record FileRetryOptions(int MaxAttempts, TimeSpan DelayStep, TimeS
 /// best-effort catch, and either way the file stays where the operation was meant to remove it from.
 /// </para>
 /// <para>
-/// Only those two exception types are retried; anything else propagates at once. The last attempt is not guarded, so
-/// its failure reaches the caller unchanged. Each retry is logged at Warning when a logger is given.
+/// Only those two exception types are retried; anything else propagates at once. The attempt made when the window closes
+/// is not guarded, so its failure reaches the caller unchanged. Each retry is logged at Warning when a logger is given.
 /// </para>
 /// </remarks>
 public static partial class FileRetry
@@ -125,27 +128,49 @@ public static partial class FileRetry
     {
         options ??= FileRetryOptions.Default;
         options.Validate();
-        for (var attempt = 1; attempt < options.MaxAttempts; attempt++)
+        var started = Stopwatch.GetTimestamp();
+        Patiently(
+            operation,
+            options,
+            static ex => ex is IOException or UnauthorizedAccessException,
+            () => Stopwatch.GetElapsedTime(started),
+            Thread.Sleep,
+            (ex, attempt, pause) =>
+            {
+                if (logger is not null)
+                    LogRetrying(logger, ex, operationName, attempt, (int)pause.TotalMilliseconds, (int)options.Patience.TotalMilliseconds, context);
+            });
+    }
+
+    /// <summary>
+    /// The window itself, with the clock and the pause passed in (the shared case table runs it on a clock of its own):
+    /// attempts until <paramref name="operation"/> succeeds, fails with an error <paramref name="transient"/> does not
+    /// accept, or the window has closed — then the last failure propagates unchanged.
+    /// </summary>
+    internal static void Patiently(Action operation, FileRetryOptions options, Func<Exception, bool> transient,
+        Func<TimeSpan> elapsed, Action<TimeSpan> pause, Action<Exception, int, TimeSpan>? retrying = null)
+    {
+        for (var attempt = 1; ; attempt++)
         {
             try
             {
                 operation();
                 return;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (transient(ex) && elapsed() < options.Patience)
             {
-                var delay = options.DelayAfter(attempt);
-                if (logger is not null)
-                    LogRetrying(logger, ex, operationName, attempt, options.MaxAttempts, (int)delay.TotalMilliseconds, context);
-                Thread.Sleep(delay);
+                var left = options.Patience - elapsed();
+                var wait = options.PauseAfter(attempt);
+                if (wait > left) wait = left;
+                retrying?.Invoke(ex, attempt, wait);
+                pause(wait);
             }
         }
-        operation(); // the last attempt: its failure propagates
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "{Operation} failed (best effort, left behind): {Context}")]
     private static partial void LogLeftBehind(ILogger logger, Exception exception, string operation, string context);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "{Operation} failed (attempt {Attempt}/{Max}), retrying in {Delay} ms: {Context}")]
-    private static partial void LogRetrying(ILogger logger, Exception exception, string operation, int attempt, int max, int delay, string context);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{Operation} failed (attempt {Attempt}), retrying in {Pause} ms within {Patience} ms: {Context}")]
+    private static partial void LogRetrying(ILogger logger, Exception exception, string operation, int attempt, int pause, int patience, string context);
 }
