@@ -11,7 +11,7 @@
 
   <PropertyGroup>
     <!-- One version for every package in the repository. -->
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <Authors>iyulab</Authors>
     <Company>iyulab</Company>
     <Copyright>Copyright (c) iyulab</Copyright>
