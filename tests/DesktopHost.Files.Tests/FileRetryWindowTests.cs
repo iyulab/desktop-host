@@ -11,24 +11,31 @@ namespace DesktopHost.Files.Tests;
 /// </summary>
 public sealed class FileRetryWindowTests
 {
-    // The table holds whatever the pauses are; run it under a pause that does not divide the windows as well as the default.
-    private static readonly int[] PauseStepsMs = [7, 300, 1000];
+    // The table holds whatever the pauses are; run it under linear steps that do not divide the windows as well as the
+    // default, and under AtomicFile's swap schedule (doubling from 15 ms, capped at 500 ms) — through both the blocking
+    // window and its awaited twin.
+    private static readonly string[] Schedules = ["linear 7", "linear 300", "linear 1000", "swap"];
 
-    public static TheoryData<string, int> Cases()
+    public static TheoryData<string, string, bool> Cases()
     {
-        var data = new TheoryData<string, int>();
+        var data = new TheoryData<string, string, bool>();
         foreach (var c in Table().GetProperty("cases").EnumerateArray())
-            foreach (var step in PauseStepsMs)
-                data.Add(c.GetProperty("name").GetString()!, step);
+            foreach (var schedule in Schedules)
+                foreach (var awaited in new[] { false, true })
+                    data.Add(c.GetProperty("name").GetString()!, schedule, awaited);
         return data;
     }
 
     private static JsonElement Table() =>
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "cases", "file-retry.json"))).RootElement;
 
+    private static Func<int, TimeSpan> PauseAfter(string schedule) => schedule == "swap"
+        ? AtomicFile.SwapPauseAfter
+        : (FileRetryOptions.Default with { PauseStep = TimeSpan.FromMilliseconds(int.Parse(schedule["linear ".Length..], System.Globalization.CultureInfo.InvariantCulture)) }).PauseAfter;
+
     [Theory]
     [MemberData(nameof(Cases))]
-    public void The_shared_file_retry_table(string name, int pauseStepMs)
+    public async Task The_shared_file_retry_table(string name, string schedule, bool awaited)
     {
         var c = Table().GetProperty("cases").EnumerateArray().Single(x => x.GetProperty("name").GetString() == name);
         var refused = TimeSpan.FromMilliseconds(c.GetProperty("refused_ms").GetInt64());
@@ -36,22 +43,24 @@ public sealed class FileRetryWindowTests
         var patience = TimeSpan.FromMilliseconds(c.GetProperty("patience_ms").GetInt64());
         var clock = TimeSpan.Zero;
         var attempts = 0;
-        var options = FileRetryOptions.Default with { Patience = patience, PauseStep = TimeSpan.FromMilliseconds(pauseStepMs) };
+
+        void Operation()
+        {
+            attempts++;
+            if (clock < refused)
+                throw transient ? new IOException("refused") : new InvalidOperationException("refused");
+        }
+
+        static bool Transient(Exception ex) => ex is IOException or UnauthorizedAccessException;
 
         string got;
         try
         {
-            FileRetry.Patiently(
-                () =>
-                {
-                    attempts++;
-                    if (clock < refused)
-                        throw transient ? new IOException("refused") : new InvalidOperationException("refused");
-                },
-                options,
-                ex => ex is IOException or UnauthorizedAccessException,
-                () => clock,
-                pause => clock += pause);
+            if (awaited)
+                await FileRetry.PatientlyAsync(Operation, patience, PauseAfter(schedule), Transient, () => clock,
+                    (pause, _) => { clock += pause; return Task.CompletedTask; });
+            else
+                FileRetry.Patiently(Operation, patience, PauseAfter(schedule), Transient, () => clock, pause => clock += pause);
             got = "ok";
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException)
@@ -61,7 +70,19 @@ public sealed class FileRetryWindowTests
 
         Assert.Equal(c.GetProperty("expect").GetString(), got);
         if (c.TryGetProperty("attempts", out var expected)) Assert.Equal(expected.GetInt32(), attempts);
-        Assert.True(clock <= patience, $"{name} (pause step {pauseStepMs} ms): waited past the window ({clock} > {patience})");
+        Assert.True(clock <= patience, $"{name} ({schedule}, awaited {awaited}): waited past the window ({clock} > {patience})");
+    }
+
+    [Fact]
+    public async Task The_awaited_window_cancels_its_pause()
+    {
+        using var cts = new CancellationTokenSource();
+        var attempts = 0;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => FileRetry.PatientlyAsync(
+            () => { attempts++; throw new IOException("refused"); },
+            TimeSpan.FromSeconds(30), _ => TimeSpan.FromSeconds(10), ex => ex is IOException, () => TimeSpan.Zero,
+            (pause, ct) => { cts.Cancel(); return Task.Delay(pause, ct); }, ct: cts.Token));
+        Assert.Equal(1, attempts);
     }
 
     [Fact]

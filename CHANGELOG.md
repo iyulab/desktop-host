@@ -14,6 +14,11 @@ All notable changes to this project are documented here. The format follows
   window is outlasted, the last attempt is made when the window closes (a pause that would cross it is cut short), and
   nothing waits past it; `Patience` zero is one attempt. The retry log line names the window. Migration: replace
   `MaxAttempts = n` with the `Patience` you mean; `MaxAttempts = 1` is `Patience = TimeSpan.Zero`.
+- `DesktopHost.Files`: `AtomicFile`'s swap retry follows the same window rule — a 2 s window measured from the first
+  attempt, the last attempt made when it closes, no pause crossing it — instead of summing its pauses to about 2 s, which
+  could overrun by one pause and did not count the time the attempts themselves took. The pauses stay short (15, 30, 60 …
+  ms, at most 500 ms); `WriteAllTextAsync` still awaits them and cancels with its token. The exhaustion message's
+  "over N ms" is now the time from the first attempt.
 
 ### Added
 

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -33,7 +34,7 @@ namespace DesktopHost.Files;
 /// <para>
 /// A reader that opens the target <i>without</i> <c>FILE_SHARE_DELETE</c> (<c>File.ReadAllText</c> is one) still
 /// blocks the rename on Windows for as long as its read lasts, and so may a virus scanner or sync client that opens
-/// the just-written file. The swap is therefore retried within a time budget. Readers that should never block a write
+/// the just-written file. The swap is therefore retried within a time window. Readers that should never block a write
 /// use <see cref="ReadAllTextShared"/> and its siblings, which share read, write and delete.
 /// </para>
 /// <para>
@@ -46,15 +47,17 @@ public static class AtomicFile
 {
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
-    // The swap's retry is budgeted in time, not in attempts. The refusal a short ladder cannot outlast comes from
-    // outside the process — something that opens the just-written file as it is closed and has let go again before
-    // anyone can ask who it was; about 225 ms of back-off was not enough for it. Waits of 15, 30, 60 … ms, none longer
-    // than 500 ms, about 2 s in all; the refusal after that is the caller's.
-    private const int ReplaceBudgetMs = 2_000;
-    private const int MaxReplaceWaitMs = 500;
+    // The swap's retry is FileRetry's window: a 2 s window from the first attempt, the last attempt made when it closes,
+    // nothing waiting past it. The refusal a short ladder cannot outlast comes from outside the process — something that
+    // opens the just-written file as it is closed and has let go again before anyone can ask who it was; about 225 ms of
+    // back-off was not enough for it. The pauses start short (a reader without FILE_SHARE_DELETE is gone within one or
+    // two): 15, 30, 60 … ms, none longer than 500 ms. The refusal after the window is the caller's.
+    private static readonly TimeSpan SwapPatience = TimeSpan.FromSeconds(2);
 
-    private static int? NextReplaceWaitMs(int attempt, int waitedMs)
-        => waitedMs >= ReplaceBudgetMs ? null : Math.Min(MaxReplaceWaitMs, 15 << Math.Min(attempt - 1, 10));
+    internal static TimeSpan SwapPauseAfter(int attempt)
+        => TimeSpan.FromMilliseconds(Math.Min(500, 15 << Math.Min(attempt - 1, 10)));
+
+    private static bool SwapRefused(Exception ex) => ex is IOException or UnauthorizedAccessException;
 
     // Writers to one path take turns within this process. Two swaps racing on the same target make the rename fail
     // faster than the bounded retry can absorb (eight concurrent writers exhausted it). The retry stays for what a
@@ -224,14 +227,14 @@ public static class AtomicFile
     /// </summary>
     /// <remarks>
     /// The content is written to a temp sibling, flushed to disk, and renamed onto the target. Writers to one path in
-    /// this process take turns. A refused rename is retried for about two seconds; the last refusal is thrown with
+    /// this process take turns. A refused rename is retried within a two-second window; the last refusal is thrown with
     /// the original exception type and HResult, and a message that names the processes holding the file where the
     /// platform can tell. The temp file never outlives the call.
     /// </remarks>
     /// <param name="path">The file to create or replace. Its directory must exist.</param>
     /// <param name="content">The complete new content.</param>
-    /// <exception cref="IOException">The file could not be replaced within the retry budget.</exception>
-    /// <exception cref="UnauthorizedAccessException">Access to the file was refused within the retry budget.</exception>
+    /// <exception cref="IOException">The file could not be replaced within the retry window.</exception>
+    /// <exception cref="UnauthorizedAccessException">Access to the file was refused within the retry window.</exception>
     public static void WriteAllText(string path, string content)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -249,23 +252,15 @@ public static class AtomicFile
                 stream.Flush(flushToDisk: true);
             }
 
-            var waited = 0;
-            string? firstHolders = null;
-            for (var attempt = 1; ; attempt++)
+            var swap = new SwapAttempts(path, temp);
+            try
             {
-                try
-                {
-                    Swap(temp, path);
-                    return;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    // A bounded retry, not a swallow: the refusal that exhausts the budget is thrown to the caller.
-                    firstHolders ??= HoldersOf(path, temp);
-                    if (NextReplaceWaitMs(attempt, waited) is not { } wait) throw Exhausted(path, attempt, waited, firstHolders, ex);
-                    Thread.Sleep(wait);
-                    waited += wait;
-                }
+                FileRetry.Patiently(swap.Attempt, SwapPatience, SwapPauseAfter, SwapRefused, swap.Elapsed, Thread.Sleep, swap.Refused);
+            }
+            catch (Exception ex) when (SwapRefused(ex))
+            {
+                // A bounded retry, not a swallow: the refusal that outlasts the window is thrown to the caller.
+                throw swap.Exhausted(ex);
             }
         }
         finally
@@ -299,25 +294,19 @@ public static class AtomicFile
                 stream.Flush(flushToDisk: true); // the rename must not publish a name whose bytes are still only in cache
             }
 
-            var waited = 0;
-            string? firstHolders = null;
-            for (var attempt = 1; ; attempt++)
+            var swap = new SwapAttempts(path, temp);
+            try
             {
-                try
-                {
-                    Swap(temp, path);
-                    return;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    // A bounded retry, not a swallow. A reader without FILE_SHARE_DELETE holds the target for the
-                    // length of its read and is gone within a wait or two; a holder in another process may need the
-                    // rest of the budget.
-                    firstHolders ??= HoldersOf(path, temp);
-                    if (NextReplaceWaitMs(attempt, waited) is not { } wait) throw Exhausted(path, attempt, waited, firstHolders, ex);
-                    await Task.Delay(wait, ct).ConfigureAwait(false);
-                    waited += wait;
-                }
+                await FileRetry.PatientlyAsync(
+                    swap.Attempt, SwapPatience, SwapPauseAfter, SwapRefused, swap.Elapsed, Task.Delay, swap.Refused, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (SwapRefused(ex))
+            {
+                // A bounded retry, not a swallow. A reader without FILE_SHARE_DELETE holds the target for the length
+                // of its read and is gone within a pause or two; a holder in another process may need the rest of the
+                // window. The refusal that outlasts it is thrown to the caller.
+                throw swap.Exhausted(ex);
             }
         }
         finally
@@ -327,9 +316,30 @@ public static class AtomicFile
         }
     }
 
-    // Asked at the first refusal, while the holder still has the file: asked only after the last attempt, the answer
-    // was almost always "nobody", because a brief holder had let go by then. Both names are asked, because a refused
-    // rename does not say which side was held.
+    // One write's swap: the attempts, their clock, and who held the file at the first refusal — asked then, while the
+    // holder still has the file: asked only after the last attempt, the answer was almost always "nobody", because a
+    // brief holder had let go by then.
+    private sealed class SwapAttempts(string path, string temp)
+    {
+        private readonly long _started = Stopwatch.GetTimestamp();
+        private int _attempts;
+        private string? _firstHolders;
+
+        public void Attempt()
+        {
+            _attempts++;
+            Swap(temp, path);
+        }
+
+        public TimeSpan Elapsed() => Stopwatch.GetElapsedTime(_started);
+
+        public void Refused(Exception ex, int attempt, TimeSpan pause) => _firstHolders ??= HoldersOf(path, temp);
+
+        public Exception Exhausted(Exception last) =>
+            AtomicFile.Exhausted(path, _attempts, (int)Elapsed().TotalMilliseconds, _firstHolders ?? HoldersOf(path, temp), last);
+    }
+
+    // Both names are asked, because a refused rename does not say which side was held.
     private static string HoldersOf(string path, string temp)
     {
         var target = FileLockHolders.Describe(path);
@@ -382,7 +392,7 @@ public static class AtomicFile
         /// </summary>
         public static int TwoStepSwaps => Volatile.Read(ref _twoStepSwaps);
 
-        /// <summary>How many writes gave up after the retry budget ran out.</summary>
+        /// <summary>How many writes gave up after the retry window closed.</summary>
         public static int ExhaustedWrites => Volatile.Read(ref _exhaustedWrites);
 
         /// <summary>The message of the most recent write that gave up, or <c>null</c> when none has.</summary>

@@ -131,7 +131,8 @@ public static partial class FileRetry
         var started = Stopwatch.GetTimestamp();
         Patiently(
             operation,
-            options,
+            options.Patience,
+            options.PauseAfter,
             static ex => ex is IOException or UnauthorizedAccessException,
             () => Stopwatch.GetElapsedTime(started),
             Thread.Sleep,
@@ -145,10 +146,12 @@ public static partial class FileRetry
     /// <summary>
     /// The window itself, with the clock and the pause passed in (the shared case table runs it on a clock of its own):
     /// attempts until <paramref name="operation"/> succeeds, fails with an error <paramref name="transient"/> does not
-    /// accept, or the window has closed — then the last failure propagates unchanged.
+    /// accept, or the window has closed — then the last failure propagates unchanged. <paramref name="pauseAfter"/> is the
+    /// caller's schedule; the window cuts a pause that would cross it short.
     /// </summary>
-    internal static void Patiently(Action operation, FileRetryOptions options, Func<Exception, bool> transient,
-        Func<TimeSpan> elapsed, Action<TimeSpan> pause, Action<Exception, int, TimeSpan>? retrying = null)
+    internal static void Patiently(Action operation, TimeSpan patience, Func<int, TimeSpan> pauseAfter,
+        Func<Exception, bool> transient, Func<TimeSpan> elapsed, Action<TimeSpan> pause,
+        Action<Exception, int, TimeSpan>? retrying = null)
     {
         for (var attempt = 1; ; attempt++)
         {
@@ -157,15 +160,47 @@ public static partial class FileRetry
                 operation();
                 return;
             }
-            catch (Exception ex) when (transient(ex) && elapsed() < options.Patience)
+            catch (Exception ex) when (transient(ex) && elapsed() < patience)
             {
-                var left = options.Patience - elapsed();
-                var wait = options.PauseAfter(attempt);
-                if (wait > left) wait = left;
+                var wait = PauseWithin(attempt, patience, pauseAfter, elapsed);
                 retrying?.Invoke(ex, attempt, wait);
                 pause(wait);
             }
         }
+    }
+
+    /// <summary>
+    /// <see cref="Patiently(Action, TimeSpan, Func{int, TimeSpan}, Func{Exception, bool}, Func{TimeSpan}, Action{TimeSpan}, Action{Exception, int, TimeSpan}?)"/>
+    /// with an awaited pause, for a caller that must not block a thread while it waits (and can cancel the wait).
+    /// </summary>
+    internal static async Task PatientlyAsync(Action operation, TimeSpan patience, Func<int, TimeSpan> pauseAfter,
+        Func<Exception, bool> transient, Func<TimeSpan> elapsed, Func<TimeSpan, CancellationToken, Task> pause,
+        Action<Exception, int, TimeSpan>? retrying = null, CancellationToken ct = default)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            TimeSpan wait;
+            try
+            {
+                operation();
+                return;
+            }
+            catch (Exception ex) when (transient(ex) && elapsed() < patience)
+            {
+                wait = PauseWithin(attempt, patience, pauseAfter, elapsed);
+                retrying?.Invoke(ex, attempt, wait);
+            }
+            await pause(wait, ct).ConfigureAwait(false);
+        }
+    }
+
+    private static TimeSpan PauseWithin(int attempt, TimeSpan patience, Func<int, TimeSpan> pauseAfter, Func<TimeSpan> elapsed)
+    {
+        // The clock moved since the filter read it; a window that closed in between leaves a zero pause and one last attempt.
+        var left = patience - elapsed();
+        if (left < TimeSpan.Zero) left = TimeSpan.Zero;
+        var wait = pauseAfter(attempt);
+        return wait > left ? left : wait;
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "{Operation} failed (best effort, left behind): {Context}")]

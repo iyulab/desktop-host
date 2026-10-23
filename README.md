@@ -52,8 +52,8 @@ monitor.Start();
 Durable file writes and the reads that go with them.
 
 - `AtomicFile` — replace a text file so that a reader sees the whole old or the whole new document, never a part:
-  temp sibling, flush to disk, one atomic rename (a POSIX-semantics rename on Windows), retried for about two seconds
-  through brief locks, with an exception that names who held the file. Shared reads (`ReadAllTextShared`,
+  temp sibling, flush to disk, one atomic rename (a POSIX-semantics rename on Windows), retried within a two-second
+  window (`FileRetry`'s window rule, shorter pauses) through brief locks, with an exception that names who held the file. Shared reads (`ReadAllTextShared`,
   `ReadLinesShared`, and `…IfExists` forms that answer "absent" only for a missing file) never block such a write.
 - `FileRetry` — delete or move a file or directory through the seconds a virus scanner or sync client holds it. The
   retry is a window (`FileRetryOptions.Patience`, 25 s by default): a refusal that ends within it is outlasted, the last
