@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-24
+
 ### Added
 
 - `DesktopHost.Signatures`: `FileCatalog.Verify(directory, catalog, publishers)` — checks a directory against a signed
@@ -98,7 +100,8 @@ All notable changes to this project are documented here. The format follows
   best-effort `TryDeleteFile` / `TryDeleteDirectory`.
 - `DesktopHost.Files`: `FileLockHolders` — names the processes holding a file open, via the Windows Restart Manager.
 
-[Unreleased]: https://github.com/iyulab/desktop-host/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/iyulab/desktop-host/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/iyulab/desktop-host/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/iyulab/desktop-host/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/iyulab/desktop-host/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/iyulab/desktop-host/compare/v0.1.0...v0.2.0
