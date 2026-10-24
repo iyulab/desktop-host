@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `DesktopHost.Signatures`: `FileCatalog.Verify(directory, catalog, publishers)` — checks a directory against a signed
+  Windows catalog (SHA-256, as `New-FileCatalog -CatalogVersion 2.0` makes it): the catalog's Authenticode signature from an
+  expected publisher, every file listed with the hash Windows computes for it (a program's Authenticode hash, other files'
+  SHA-256), every listed file present. Closes the gap an entry program's own signature leaves: the scripts, libraries and
+  data beside it. `CatalogCheck` names the verdict and the file it is about.
+
 ## [0.4.0] - 2026-10-24
 
 ### Changed

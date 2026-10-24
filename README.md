@@ -150,6 +150,13 @@ publisher it expects.
 - Offline by design: revocation is not checked and nothing is fetched to build the chain, so a computer without a
   connection still verifies what it downloaded through another path. A certificate revoked after a file was signed still
   passes this check.
+- `FileCatalog.Verify(directory, catalog, publishers)` — the files beside a signed program: a directory checked against a
+  signed Windows catalog (`.cat`, made by PowerShell's `New-FileCatalog -CatalogVersion 2.0` and signed like a program).
+  The catalog's own signature goes through the same check and publishers; then every file under the directory must be
+  listed with the hash Windows computes for it (a program's Authenticode hash, any other file's SHA-256), and every listed
+  file must be there. `CatalogCheck.Verdict`: `Trusted`, `CatalogNotTrusted`, `CatalogUnreadable`, `FileNotListed`,
+  `FileChanged`, `FileMissing`, or `Unsupported` off Windows; `File` names the file a verdict is about. The catalog may sit
+  inside the directory it lists.
 
 ```csharp
 using DesktopHost.Signatures;
@@ -158,6 +165,10 @@ var publisher = new Publisher("Example Software Ltd") { Country = "US", SerialNu
 var check = Authenticode.Verify(downloadedExe, [publisher]);
 if (!check.IsTrusted)
     throw new InvalidOperationException($"refusing {downloadedExe}: {check}");
+
+var staged = FileCatalog.Verify(stagedDirectory, Path.Combine(stagedDirectory, "component.cat"), [publisher]);
+if (!staged.IsTrusted)
+    throw new InvalidOperationException($"refusing {stagedDirectory}: {staged}");
 ```
 
 ## License
