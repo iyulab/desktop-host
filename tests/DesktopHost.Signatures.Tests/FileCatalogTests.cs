@@ -192,8 +192,7 @@ public sealed class FileCatalogTests : IDisposable
     [Fact]
     public void A_check_that_names_no_publisher_is_refused()
     {
-        Seed();
-        File.WriteAllText(_catalog, "x");
+        // Refused before anything is read, on every platform — so this test seeds nothing (the seed copies a Windows file).
         Assert.Throws<ArgumentException>(() => FileCatalog.Verify(_dir, _catalog, []));
     }
 }
