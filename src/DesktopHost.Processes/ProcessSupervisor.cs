@@ -67,7 +67,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
     private int _generation;
     private int _consecutiveFailures;
     private DateTimeOffset _lastStart;
-    private string? _startFailure;
+    private string? _runFailure;
     private int? _exitCodeAtKill;
 
     /// <summary>Creates a supervisor. Nothing starts until <see cref="StartAsync"/>.</summary>
@@ -249,7 +249,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         var generation = ++_generation;
         _process = process;
         _lastStart = _clock.GetUtcNow();
-        _startFailure = null;
+        _runFailure = null;
         _exitCodeAtKill = null;
         LastError = null;
         Restarts = generation - 1;
@@ -283,27 +283,99 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
             }
             catch (OperationCanceledException) when (timeout.IsCancellationRequested)
             {
-                FailStart(generation, $"not ready within {_options.ReadyTimeout!.Value.TotalSeconds:0.#} s");
+                FailRun(generation, $"not ready within {_options.ReadyTimeout!.Value.TotalSeconds:0.#} s");
                 await StopCurrentAsync(graceful: false).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex)
             {
                 LogReadyFailed(_logger, ex, _options.Name);
-                FailStart(generation, $"not ready: {ex.Message}");
+                FailRun(generation, $"not ready: {ex.Message}");
                 await StopCurrentAsync(graceful: false).ConfigureAwait(false);
                 return;
             }
         }
 
         SetState(ProcessState.Running);
+        if (_options.Liveness is { } liveness) _ = WatchLivenessAsync(process, generation, liveness, lifetime);
     }
 
-    // The process is killed next; its watcher sees the exit and applies the restart policy with this reason.
-    private void FailStart(int generation, string reason)
+    // Checks the running child every period. Misses in a row up to the threshold end it the way a stop does, as a failed
+    // run named for the checks — the exit watcher then applies the restart policy. Ends with the process's generation.
+    private async Task WatchLivenessAsync(Process process, int generation, LivenessPolicy policy, CancellationToken lifetime)
+    {
+        var readyAt = _clock.GetUtcNow();
+        var misses = 0;
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(policy.Period, _clock, lifetime).ConfigureAwait(false);
+                if (generation != Volatile.Read(ref _generation) || process.HasExited) return;
+
+                bool alive;
+                using (var timeout = new CancellationTokenSource(policy.Timeout, _clock))
+                using (var linked = CancellationTokenSource.CreateLinkedTokenSource(lifetime, timeout.Token))
+                {
+                    try
+                    {
+                        alive = await policy.Probe!(process, linked.Token).WaitAsync(linked.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        alive = false;
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        LogLivenessProbeFailed(_logger, ex, _options.Name, generation);
+                        alive = false;
+                    }
+                }
+
+                if (alive)
+                {
+                    misses = 0;
+                    continue;
+                }
+                if (_clock.GetUtcNow() - readyAt < policy.StartupGrace) continue;
+                misses++;
+                LogLivenessMissed(_logger, _options.Name, generation, misses, policy.FailureThreshold);
+                if (misses < policy.FailureThreshold) continue;
+
+                await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                try
+                {
+                    if (generation != _generation || State != ProcessState.Running || !ReferenceEquals(_process, process)) return;
+                    FailRun(generation, $"stopped answering: {misses} liveness checks missed in a row");
+                    await StopCurrentAsync(graceful: true).ConfigureAwait(false);
+                }
+                finally
+                {
+                    ReleaseGate();
+                }
+                return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // A stop ended this process's watchers.
+        }
+        catch (InvalidOperationException)
+        {
+            // The process was released (replaced or stopped) between two checks.
+        }
+    }
+
+    // The process is killed next; its watcher sees the exit and applies the restart policy with this reason (a run that
+    // failed this way is never a permanent exit — the exit code is the kill's, not the child's).
+    private void FailRun(int generation, string reason)
     {
         if (generation != _generation) return;
-        _startFailure = reason;
+        _runFailure = reason;
         LastError = reason;
     }
 
@@ -371,10 +443,10 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
             UnexpectedExits++;
             var uptime = _clock.GetUtcNow() - _lastStart;
             if (uptime >= _options.Restart.StableAfter) _consecutiveFailures = 0;
-            var permanent = _startFailure is null && _options.Restart.IsPermanentExit?.Invoke(code) == true;
+            var permanent = _runFailure is null && _options.Restart.IsPermanentExit?.Invoke(code) == true;
             var delays = _options.Restart.Delays;
             var restart = !permanent && _consecutiveFailures < delays.Count;
-            var cause = _startFailure ?? $"exited with code {code}";
+            var cause = _runFailure ?? $"exited with code {code}";
             LogExited(_logger, _options.Name, generation, code, uptime, restart);
             var willRestart = restart;
             _pendingEvents.Add(() => Exited?.Invoke(code, willRestart));
@@ -548,6 +620,12 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "[{Name}#{Generation}] exited with code {Code} after {Uptime}; starting again: {Restart}")]
     private static partial void LogExited(ILogger logger, string name, int generation, int code, TimeSpan uptime, bool restart);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[{Name}#{Generation}] liveness check missed ({Misses}/{Threshold} in a row)")]
+    private static partial void LogLivenessMissed(ILogger logger, string name, int generation, int misses, int threshold);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[{Name}#{Generation}] the liveness check failed; counted as a miss")]
+    private static partial void LogLivenessProbeFailed(ILogger logger, Exception ex, string name, int generation);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "[{Name}] gave up: {Reason}")]
     private static partial void LogGaveUp(ILogger logger, string name, string reason);

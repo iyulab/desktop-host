@@ -16,8 +16,9 @@ quiet ways:
 - **Its own health** — noticing when its thread pool stops starting work, the state in which it
   answers nothing yet looks alive to itself
 
-**Status:** 0.3.0 — `DesktopHost.Files`, `DesktopHost.Logging` and `DesktopHost.Processes` on NuGet;
-`DesktopHost.Signatures` and `DesktopHost.Diagnostics` are unreleased (on `main`).
+**Status:** 0.5.0 — `DesktopHost.Files`, `DesktopHost.Logging`, `DesktopHost.Processes`, `DesktopHost.Signatures` and
+`DesktopHost.Diagnostics` on NuGet, one version for all; what `main` adds since is under `[Unreleased]` in the
+[changelog](CHANGELOG.md).
 See [SCOPE.md](SCOPE.md) for what belongs here.
 
 ## Packages
@@ -110,7 +111,11 @@ which keeps them from outliving the host.
   raised outside the supervisor's lock, so a handler can call back in.
 - `ProcessSupervisorOptions` — `Command` (resolved at each start; the child gets only the environment it names), `Ready` +
   `ReadyTimeout`, `RestartPolicy` (`Delays`, `StableAfter`, `IsPermanentExit`), `StopPolicy` (`GracefulStop`,
-  `GracefulTimeout`, `CloseMainWindow`), `Guardian` (share one per host), `Logger`, `StderrTailLines`.
+  `GracefulTimeout`, `CloseMainWindow`), `LivenessPolicy` (below), `Guardian` (share one per host), `Logger`, `StderrTailLines`.
+- `LivenessPolicy` — for a child that can be alive and still not answer: your check (`Probe` — an HTTP path, a ping on a
+  pipe) every `Period`, a miss when it says no, throws or takes longer than `Timeout`; `FailureThreshold` misses in a row
+  (default 3; any answer starts the count over, misses inside `StartupGrace` after ready are not counted) stop the child as a
+  failed run whose reason names the checks, and the restart policy takes it from there.
 - The words differ from a shell kit's on purpose. `RestartPolicy` here is a ladder of growing pauses (2 s, 8 s, 32 s) that
   starts over after a run lasting `StableAfter` — the policy for a host's own workers. A shell supervising the host itself
   (the Tauri kit's sidecar `RestartPolicy`) allows a number of starts within a window and then stays down, with no growing

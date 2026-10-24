@@ -44,6 +44,44 @@ public sealed class StopPolicy
     public TimeSpan CloseMainWindowTimeout { get; set; } = TimeSpan.FromSeconds(3);
 }
 
+/// <summary>
+/// How a running child that has not exited is judged alive: a check the caller supplies, made every <see cref="Period"/>,
+/// and a restart once <see cref="FailureThreshold"/> checks in a row are missed — any answer starts the count over. The
+/// shape of a container orchestrator's liveness probe; the check itself (an HTTP path, a ping on a pipe) is the caller's.
+/// </summary>
+public sealed class LivenessPolicy
+{
+    /// <summary>
+    /// The check: <c>true</c> when the child answered as alive. <c>false</c>, an exception, or no answer within
+    /// <see cref="Timeout"/> is a miss. Required.
+    /// </summary>
+    public Func<Process, CancellationToken, Task<bool>>? Probe { get; set; }
+
+    /// <summary>The time between checks. Default 5 s.</summary>
+    public TimeSpan Period { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long one check may take before it counts as a miss. Default 5 s.</summary>
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>Misses in a row that make the child unresponsive — it is stopped and the restart policy applies. Default 3.</summary>
+    public int FailureThreshold { get; set; } = 3;
+
+    /// <summary>
+    /// A window after the child became ready in which a miss is not counted — for a child still warming up after it said
+    /// it was ready. Default 10 s.
+    /// </summary>
+    public TimeSpan StartupGrace { get; set; } = TimeSpan.FromSeconds(10);
+
+    internal void Validate()
+    {
+        if (Probe is null) throw new ArgumentException("A liveness policy needs a probe.", nameof(Probe));
+        if (Period <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(Period), "The period must be positive.");
+        if (Timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(Timeout), "The timeout must be positive.");
+        if (FailureThreshold < 1) throw new ArgumentOutOfRangeException(nameof(FailureThreshold), "At least one miss is needed.");
+        if (StartupGrace < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(StartupGrace), "The grace cannot be negative.");
+    }
+}
+
 /// <summary>What a <see cref="ProcessSupervisor"/> runs and how it watches it.</summary>
 public sealed class ProcessSupervisorOptions
 {
@@ -74,6 +112,12 @@ public sealed class ProcessSupervisorOptions
     /// <summary>How a running child is stopped.</summary>
     public StopPolicy Stop { get; set; } = new();
 
+    /// <summary>
+    /// How a running child is judged alive beyond not having exited; <c>null</c> (the default) watches the exit only.
+    /// An unresponsive child is stopped the way <see cref="Stop"/> says and counts as a failed run.
+    /// </summary>
+    public LivenessPolicy? Liveness { get; set; }
+
     /// <summary>How many of the last standard-error lines to keep for <see cref="ProcessSupervisor.StderrTail"/>. Default 20.</summary>
     public int StderrTailLines { get; set; } = 20;
 
@@ -101,6 +145,7 @@ public sealed class ProcessSupervisorOptions
         if (ReadyTimeout is { } t && t <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(ReadyTimeout), "The ready timeout must be positive, or null.");
         if (StderrTailLines < 0) throw new ArgumentOutOfRangeException(nameof(StderrTailLines));
+        Liveness?.Validate();
     }
 }
 

@@ -193,6 +193,138 @@ public sealed class ProcessSupervisorTests
         Assert.Equal(reason, supervisor.LastError);
     }
 
+    // A probe that answers from a switch the test flips: alive while it is on, a miss while it is off.
+    private sealed class Switch
+    {
+        public volatile bool Alive = true;
+        public int Calls;
+        public Func<Process, CancellationToken, Task<bool>> Probe => (_, _) =>
+        {
+            Interlocked.Increment(ref Calls);
+            return Task.FromResult(Alive);
+        };
+    }
+
+    private static LivenessPolicy Liveness(Func<Process, CancellationToken, Task<bool>> probe, int threshold = 3) => new()
+    {
+        Probe = probe,
+        Period = TimeSpan.FromMilliseconds(40),
+        Timeout = TimeSpan.FromMilliseconds(500),
+        FailureThreshold = threshold,
+        StartupGrace = TimeSpan.Zero,
+    };
+
+    [Fact]
+    public async Task A_child_that_stops_answering_its_liveness_check_is_restarted_and_the_reason_names_the_check()
+    {
+        var probe = new Switch();
+        var reasons = new ConcurrentQueue<string>();
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("ready", "echo"), o =>
+        {
+            o.Ready = ReadyLine(new ConcurrentQueue<Process>());
+            o.Liveness = Liveness(probe.Probe);
+        }));
+        supervisor.StateChanged += s => { if (s == ProcessState.Restarting) reasons.Enqueue(supervisor.LastError ?? ""); };
+
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+        var first = supervisor.Pid!.Value;
+        probe.Alive = false;
+
+        await Eventually(() => !reasons.IsEmpty);
+        probe.Alive = true;
+        await Eventually(() => supervisor.State == ProcessState.Running && supervisor.Pid is { } pid && pid != first);
+
+        Assert.True(IsGone(first));
+        Assert.Equal(1, supervisor.UnexpectedExits);
+        Assert.True(reasons.TryPeek(out var reason));
+        Assert.Contains("3 liveness checks missed in a row", reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_answer_between_misses_starts_the_count_over()
+    {
+        var calls = 0;
+        // miss, miss, answer, miss, miss, answer … — never three in a row.
+        Task<bool> Probe(Process _, CancellationToken __) => Task.FromResult(Interlocked.Increment(ref calls) % 3 == 0);
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("ready", "echo"), o =>
+        {
+            o.Ready = ReadyLine(new ConcurrentQueue<Process>());
+            o.Liveness = Liveness(Probe);
+        }));
+
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+        var pid = supervisor.Pid;
+        await Eventually(() => Volatile.Read(ref calls) >= 15);
+
+        Assert.Equal(ProcessState.Running, supervisor.State);
+        Assert.Equal(pid, supervisor.Pid);
+        Assert.Equal(0, supervisor.UnexpectedExits);
+    }
+
+    [Fact]
+    public async Task A_check_that_does_not_answer_in_time_is_a_miss()
+    {
+        var reasons = new ConcurrentQueue<string>();
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("ready", "echo"), o =>
+        {
+            o.Ready = ReadyLine(new ConcurrentQueue<Process>());
+            o.Liveness = Liveness(async (_, ct) => { await Task.Delay(System.Threading.Timeout.Infinite, ct); return true; });
+            o.Liveness.Timeout = TimeSpan.FromMilliseconds(60);
+        }));
+        supervisor.StateChanged += s => { if (s == ProcessState.Restarting) reasons.Enqueue(supervisor.LastError ?? ""); };
+
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+
+        await Eventually(() => !reasons.IsEmpty);
+        Assert.True(reasons.TryPeek(out var reason));
+        Assert.Contains("liveness checks missed in a row", reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Misses_inside_the_startup_grace_are_not_counted()
+    {
+        var probe = new Switch { Alive = false };
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("ready", "echo"), o =>
+        {
+            o.Ready = ReadyLine(new ConcurrentQueue<Process>());
+            o.Liveness = Liveness(probe.Probe);
+            o.Liveness.StartupGrace = TimeSpan.FromSeconds(30);
+        }));
+
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+        await Eventually(() => Volatile.Read(ref probe.Calls) >= 8);
+
+        Assert.Equal(ProcessState.Running, supervisor.State);
+        Assert.Equal(0, supervisor.UnexpectedExits);
+    }
+
+    [Fact]
+    public async Task No_check_runs_after_a_stop()
+    {
+        var probe = new Switch();
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("ready", "echo"), o =>
+        {
+            o.Ready = ReadyLine(new ConcurrentQueue<Process>());
+            o.Liveness = Liveness(probe.Probe);
+        }));
+
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+        await Eventually(() => Volatile.Read(ref probe.Calls) >= 2);
+        await supervisor.StopAsync(TestContext.Current.CancellationToken);
+        var after = Volatile.Read(ref probe.Calls);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        Assert.InRange(Volatile.Read(ref probe.Calls), after, after + 1);
+    }
+
+    [Fact]
+    public void A_liveness_policy_out_of_range_is_refused()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ProcessSupervisor(Options(() => Child(), o =>
+            o.Liveness = new LivenessPolicy { Probe = (_, _) => Task.FromResult(true), FailureThreshold = 0 })));
+        Assert.Throws<ArgumentException>(() => new ProcessSupervisor(Options(() => Child(), o => o.Liveness = new LivenessPolicy())));
+    }
+
     [Fact]
     public async Task A_permanent_exit_code_is_not_retried()
     {

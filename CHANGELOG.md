@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `DesktopHost.Processes`: `ProcessSupervisorOptions.Liveness` (`LivenessPolicy`) — a check the caller supplies, made every
+  `Period` (default 5 s) with a `Timeout` (5 s); `FailureThreshold` misses in a row (3) — a `false`, an exception or no answer
+  in time — stop the running child the way `Stop` says and count as a failed run, with a reason naming the checks
+  («stopped answering: 3 liveness checks missed in a row»); any answer starts the count over, and misses within
+  `StartupGrace` (10 s) after the child became ready are not counted. `null` (the default) watches the exit only, as before.
+
 ## [0.5.0] - 2026-10-24
 
 ### Added
