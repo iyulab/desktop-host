@@ -111,11 +111,18 @@ which keeps them from outliving the host.
   raised outside the supervisor's lock, so a handler can call back in.
 - `ProcessSupervisorOptions` — `Command` (resolved at each start; the child gets only the environment it names), `Ready` +
   `ReadyTimeout`, `RestartPolicy` (`Delays`, `StableAfter`, `IsPermanentExit`), `StopPolicy` (`GracefulStop`,
-  `GracefulTimeout`, `CloseMainWindow`), `LivenessPolicy` (below), `Guardian` (share one per host), `Logger`, `StderrTailLines`.
+  `GracefulTimeout`, `CloseMainWindow`), `LivenessPolicy` (below), `Guardian` (share one per host), `ChildOutlivesSupervisor`
+  (below), `Logger`, `StderrTailLines`.
 - `LivenessPolicy` — for a child that can be alive and still not answer: your check (`Probe` — an HTTP path, a ping on a
   pipe) every `Period`, a miss when it says no, throws or takes longer than `Timeout`; `FailureThreshold` misses in a row
   (default 3; any answer starts the count over, misses inside `StartupGrace` after ready are not counted) stop the child as a
   failed run whose reason names the checks, and the restart policy takes it from there.
+- `ChildOutlivesSupervisor` — for a supervisor that starts a long-lived child and then ends on purpose (a launcher handing
+  over to the program it started). Disposing it ends the watching — exit watcher, liveness checks, a scheduled restart — and
+  leaves the running child alone; `StopAsync` still stops it. Its own guardian is built so that children outlive their
+  owner (ChildProcessGuard's `ChildrenOutliveOwner`); a guardian passed in through `Guardian` must already be, or the options
+  are refused. The child outlives the supervisor *ending*, not the owner process being killed, and the supervisor's pipes to
+  it (standard input, output, error) close with it — the child must not depend on them.
 - The words differ from a shell kit's on purpose. `RestartPolicy` here is a ladder of growing pauses (2 s, 8 s, 32 s) that
   starts over after a run lasting `StableAfter` — the policy for a host's own workers. A shell supervising the host itself
   (the Tauri kit's sidecar `RestartPolicy`) allows a number of starts within a window and then stays down, with no growing
