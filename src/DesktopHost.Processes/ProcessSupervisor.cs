@@ -80,7 +80,9 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         _logger = options.Logger ?? NullLogger.Instance;
         _clock = options.TimeProvider;
         _ownsGuardian = options.Guardian is null;
-        _guardian = options.Guardian ?? new ProcessGuardian();
+        _guardian = options.Guardian ?? (options.ChildOutlivesSupervisor
+            ? new ProcessGuardianBuilder().WithChildrenOutliveOwner().Build()
+            : new ProcessGuardian());
     }
 
     /// <summary>Where the supervisor stands.</summary>
@@ -200,6 +202,32 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         {
             SetState(ProcessState.Stopped);
             await StopCurrentAsync(graceful: true).ConfigureAwait(false);
+        }
+        finally
+        {
+            ReleaseGate();
+        }
+    }
+
+    // Ends the watching — the exit watcher, the checks, a scheduled restart — and lets go of the running child without
+    // stopping it. A child that was still starting is left as it is.
+    private async Task LeaveCoreAsync()
+    {
+        try
+        {
+            _lifetime.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+        await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            SetState(ProcessState.Stopped);
+            var p = _process;
+            _process = null;
+            if (p is not null) Release(p);
         }
         finally
         {
@@ -587,11 +615,15 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         foreach (var raise in events) raise();
     }
 
-    /// <summary>Stops the current process and ends the supervisor. Disposes the guardian only if it created it.</summary>
+    /// <summary>
+    /// Stops the current process and ends the supervisor — or, with <see cref="ProcessSupervisorOptions.ChildOutlivesSupervisor"/>,
+    /// ends the supervisor and leaves the running child. Disposes the guardian only if it created it.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposeStarted, 1) == 1) return;
-        await StopCoreAsync().ConfigureAwait(false);
+        if (_options.ChildOutlivesSupervisor) await LeaveCoreAsync().ConfigureAwait(false);
+        else await StopCoreAsync().ConfigureAwait(false);
         _disposed = true;
         _lifetime.Dispose();
         if (_ownsGuardian) await _guardian.DisposeAsync().ConfigureAwait(false);

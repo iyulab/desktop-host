@@ -8,11 +8,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `DesktopHost.Processes`: `ProcessSupervisorOptions.ChildOutlivesSupervisor` — for a supervisor that starts a long-lived child and
+  then ends on purpose (a launcher handing over to the program it started). Disposing the supervisor ends the watching — the exit
+  watcher, the liveness checks, a scheduled restart — and leaves the running child alone instead of stopping it; `StopAsync` still
+  stops it. The guardian the supervisor creates lets its children outlive their owner (ChildProcessGuard 1.5.0's
+  `ChildrenOutliveOwner`); a guardian passed in through `Guardian` must already do, or the options are refused. The child outlives the
+  supervisor *ending*, not the owner process crashing, and the supervisor's pipes to it end with the supervisor.
 - `DesktopHost.Processes`: `ProcessSupervisorOptions.Liveness` (`LivenessPolicy`) — a check the caller supplies, made every
   `Period` (default 5 s) with a `Timeout` (5 s); `FailureThreshold` misses in a row (3) — a `false`, an exception or no answer
   in time — stop the running child the way `Stop` says and count as a failed run, with a reason naming the checks
   («stopped answering: 3 liveness checks missed in a row»); any answer starts the count over, and misses within
   `StartupGrace` (10 s) after the child became ready are not counted. `null` (the default) watches the exit only, as before.
+
+### Changed
+
+- ChildProcessGuard 1.4.0 → 1.5.0.
 
 ## [0.5.0] - 2026-10-24
 

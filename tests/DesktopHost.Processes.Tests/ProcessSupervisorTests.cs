@@ -508,6 +508,120 @@ public sealed class ProcessSupervisorTests
         await Assert.ThrowsAsync<ObjectDisposedException>(() => supervisor.StartAsync());
     }
 
+    private static void KillQuietly(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            p.Kill(entireProcessTree: true);
+        }
+        catch (ArgumentException)
+        {
+            // Already gone.
+        }
+        catch (InvalidOperationException)
+        {
+            // Already gone.
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Disposing_the_supervisor_leaves_the_child_only_when_it_was_asked_to_outlive_it(bool outlives)
+    {
+        var started = new ConcurrentQueue<Process>();
+        var supervisor = new ProcessSupervisor(Options(() => Child("ready", "sleep", "600000"), o =>
+        {
+            o.ChildOutlivesSupervisor = outlives;
+            o.Ready = ReadyLine(started);
+        }));
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+        var pid = supervisor.Pid!.Value;
+        try
+        {
+            await supervisor.DisposeAsync();
+
+            if (outlives) Assert.False(IsGone(pid), "the child must still be running after the supervisor ended");
+            else await Eventually(() => IsGone(pid));
+        }
+        finally
+        {
+            KillQuietly(pid);
+        }
+    }
+
+    [Fact]
+    public async Task A_child_left_running_is_not_started_again_when_it_later_exits()
+    {
+        var starts = 0;
+        var started = new ConcurrentQueue<Process>();
+        var supervisor = new ProcessSupervisor(Options(() => { Interlocked.Increment(ref starts); return Child("ready", "sleep", "600000"); }, o =>
+        {
+            o.ChildOutlivesSupervisor = true;
+            o.Ready = ReadyLine(started);
+        }));
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+        var pid = supervisor.Pid!.Value;
+        try
+        {
+            await supervisor.DisposeAsync();
+            Assert.Equal(ProcessState.Stopped, supervisor.State);
+            Assert.Null(supervisor.Pid);
+
+            KillQuietly(pid);
+            await Eventually(() => IsGone(pid));
+            await Task.Delay(400, TestContext.Current.CancellationToken); // longer than every restart delay of the test options
+
+            Assert.Equal(1, starts);
+        }
+        finally
+        {
+            KillQuietly(pid);
+        }
+    }
+
+    [Fact]
+    public async Task Stopping_still_stops_a_child_that_may_outlive_the_supervisor()
+    {
+        var started = new ConcurrentQueue<Process>();
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("ready", "sleep", "600000"), o =>
+        {
+            o.ChildOutlivesSupervisor = true;
+            o.Ready = ReadyLine(started);
+        }));
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+        var pid = supervisor.Pid!.Value;
+        try
+        {
+            await supervisor.StopAsync(TestContext.Current.CancellationToken);
+
+            Assert.True(IsGone(pid));
+        }
+        finally
+        {
+            KillQuietly(pid);
+        }
+    }
+
+    [Fact]
+    public async Task A_guardian_that_kills_its_children_cannot_serve_a_child_meant_to_outlive_the_supervisor()
+    {
+        await using var killing = new ProcessGuardian();
+        Assert.Throws<ArgumentException>(() => new ProcessSupervisor(Options(() => Child("ready"), o =>
+        {
+            o.Guardian = killing;
+            o.ChildOutlivesSupervisor = true;
+        })));
+
+        await using var leaving = new ProcessGuardianBuilder().WithChildrenOutliveOwner().Build();
+        await using var ok = new ProcessSupervisor(Options(() => Child("ready"), o =>
+        {
+            o.Guardian = leaving;
+            o.ChildOutlivesSupervisor = true;
+        }));
+    }
+
     [Fact]
     public async Task A_guardian_that_was_passed_in_is_left_to_its_owner()
     {

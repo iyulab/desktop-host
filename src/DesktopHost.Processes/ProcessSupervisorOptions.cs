@@ -128,6 +128,21 @@ public sealed class ProcessSupervisorOptions
     /// </summary>
     public ProcessGuardian? Guardian { get; set; }
 
+    /// <summary>
+    /// For a supervisor that starts a long-lived child and then ends on purpose — a launcher that hands over to the program
+    /// it started. Disposing the supervisor then ends the supervision (no more restarts, no more checks) and <b>leaves the
+    /// running child alone</b> instead of stopping it; <see cref="ProcessSupervisor.StopAsync"/> still stops it. The
+    /// guardian the supervisor creates is built so that its children outlive it; a guardian passed in through
+    /// <see cref="Guardian"/> must already be (<c>ProcessGuardianOptions.ChildrenOutliveOwner</c>), or the options are
+    /// refused — a job object that kills on close would take the child down with the guardian. Default off.
+    /// <para>
+    /// What the child outlives is the supervisor <i>ending</i>, not the owner process crashing: if the owner is killed on
+    /// Windows the child is still tracked by nothing, and on Linux and macOS it is never cleaned up for the owner. The
+    /// supervisor's pipes to the child (standard input, output and error) end with it, so the child must not depend on them.
+    /// </para>
+    /// </summary>
+    public bool ChildOutlivesSupervisor { get; set; }
+
     /// <summary>Where lifecycle lines and the child's standard error are logged. Default: nowhere.</summary>
     public ILogger? Logger { get; set; }
 
@@ -145,6 +160,9 @@ public sealed class ProcessSupervisorOptions
         if (ReadyTimeout is { } t && t <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(ReadyTimeout), "The ready timeout must be positive, or null.");
         if (StderrTailLines < 0) throw new ArgumentOutOfRangeException(nameof(StderrTailLines));
+        if (ChildOutlivesSupervisor && Guardian is { Options.ChildrenOutliveOwner: false })
+            throw new ArgumentException(
+                "The child can outlive the supervisor only if the guardian lets its children outlive their owner.", nameof(Guardian));
         Liveness?.Validate();
     }
 }
