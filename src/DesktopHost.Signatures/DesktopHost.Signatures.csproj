@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Description>Whether a file a local .NET host is about to run comes from the publisher it expects: a valid Authenticode signature checked the way Windows checks it (WinVerifyTrust, offline), and the verified signer's certificate subject matched against the publishers the caller names — so a renewed certificate keeps passing and a validly signed file from anyone else does not.</Description>
-    <PackageTags>authenticode;code-signing;signature;wintrust;update;publisher;desktop</PackageTags>
+    <Description>Whether a file a local .NET host is about to run comes from the publisher it expects: on Windows a valid Authenticode signature checked the way Windows checks it (WinVerifyTrust, offline) with the verified signer's certificate subject matched against the publishers the caller names; on macOS a valid code signature checked by the system (codesign) from an expected Developer ID team, optionally notarized — so a renewed certificate keeps passing and a validly signed file from anyone else does not.</Description>
+    <PackageTags>authenticode;code-signing;signature;wintrust;codesign;notarization;update;publisher;desktop</PackageTags>
     <IsPackable>true</IsPackable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageReadmeFile>README.md</PackageReadmeFile>

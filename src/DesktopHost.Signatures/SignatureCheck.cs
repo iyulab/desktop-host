@@ -1,6 +1,6 @@
 namespace DesktopHost.Signatures;
 
-/// <summary>What <see cref="Authenticode.Verify"/> found.</summary>
+/// <summary>What <see cref="Authenticode.Verify"/> or <see cref="MacCodeSignature.Verify"/> found.</summary>
 public enum SignatureVerdict
 {
     /// <summary>A valid signature, from one of the expected publishers.</summary>
@@ -17,15 +17,21 @@ public enum SignatureVerdict
     /// <summary>A valid signature from a publisher other than the expected ones.</summary>
     UnexpectedPublisher,
 
-    /// <summary>Nothing was checked: Authenticode is a Windows signature, and this is not Windows.</summary>
+    /// <summary>Nothing was checked: the signature kind belongs to another operating system (Authenticode is Windows'; a macOS code
+    /// signature is checked on macOS only).</summary>
     Unsupported,
+
+    /// <summary>A valid signature from an expected publisher, but Apple has not notarized the file (macOS, when notarization
+    /// was required).</summary>
+    NotNotarized,
 }
 
 /// <summary>The result of checking one file's signature.</summary>
 /// <param name="Verdict">What was found.</param>
 /// <param name="Signer">The verified signer certificate's subject, when the signature was valid; null otherwise.</param>
-/// <param name="Status">The status <c>WinVerifyTrust</c> returned (an HRESULT; 0 when the signature is valid) — for a log
-/// line, not for branching on: <see cref="Verdict"/> is the answer.</param>
+/// <param name="Status">The status the check returned — <c>WinVerifyTrust</c>'s HRESULT, or the exit code of the macOS tool that
+/// decided (0 when the signature is valid, -1 when a tool did not finish in time) — for a log line, not for branching on:
+/// <see cref="Verdict"/> is the answer.</param>
 public sealed record SignatureCheck(SignatureVerdict Verdict, string? Signer, int Status)
 {
     /// <summary>True only for <see cref="SignatureVerdict.Trusted"/>.</summary>

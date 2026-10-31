@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `DesktopHost.Signatures`: `MacCodeSignature.Verify(path, teams, requireNotarization)` and `AppleTeam` — the macOS counterpart of
+  `Authenticode.Verify`, with the same `SignatureCheck` answer. The system's `codesign` checks the signature of a program or an
+  application bundle (`--verify --strict --deep`: the content unchanged since signing, every nested part covered, a chain to Apple's
+  root), then checks it again against a code requirement that only a Developer ID signature from an expected team satisfies (Apple's
+  Developer ID shape with the leaf's team identifier added), so the verdict is the tool's answer and not text read from a printout. A
+  team identifier outlives a certificate renewal, as a subject pin does on Windows. `requireNotarization` also asks Gatekeeper's
+  assessment (`spctl`) for `Notarized Developer ID`. The tools run by absolute path with an argument list and no shell; a tool that
+  does not finish in time counts as a signature that does not hold. New verdict `SignatureVerdict.NotNotarized`; `Unsupported` now
+  also means «this signature kind belongs to another operating system».
 - `DesktopHost.Processes`: `ProcessSupervisorOptions.ChildOutlivesSupervisor` — for a supervisor that starts a long-lived child and
   then ends on purpose (a launcher handing over to the program it started). Disposing the supervisor ends the watching — the exit
   watcher, the liveness checks, a scheduled restart — and leaves the running child alone instead of stopping it; `StopAsync` still

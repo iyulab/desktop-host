@@ -162,6 +162,15 @@ publisher it expects.
 - Offline by design: revocation is not checked and nothing is fetched to build the chain, so a computer without a
   connection still verifies what it downloaded through another path. A certificate revoked after a file was signed still
   passes this check.
+- `MacCodeSignature.Verify(path, teams, requireNotarization)` — the same question on macOS, for a program or an application
+  bundle, answered by the system's own `codesign`: the signature must hold (`--verify --strict --deep`), and must satisfy a code
+  requirement that only a Developer ID signature from one of the expected `AppleTeam`s does — an Apple-anchored chain through the
+  Developer ID certification authority, a Developer ID Application leaf, and the team identifier as the leaf's organizational
+  unit. A team identifier survives a certificate renewal like a subject pin does. With `requireNotarization`, Gatekeeper's
+  assessment (`spctl`) must also call it `Notarized Developer ID`; a file signed by an expected team that Apple has not notarized
+  is `NotNotarized`. Same `SignatureCheck` and verdicts, and `Unsupported` off macOS. Two things worth knowing: `--strict` refuses
+  a bundle that carries Finder metadata or resource forks («detritus»), so an archive should be made and extracted without them;
+  and whether Gatekeeper looks a notarization ticket up online when it is not stapled is the system's policy, not this check's.
 - `FileCatalog.Verify(directory, catalog, publishers)` — the files beside a signed program: a directory checked against a
   signed Windows catalog (`.cat`, made by PowerShell's `New-FileCatalog -CatalogVersion 2.0` and signed like a program).
   The catalog's own signature goes through the same check and publishers; then every file under the directory must be
@@ -181,6 +190,15 @@ if (!check.IsTrusted)
 var staged = FileCatalog.Verify(stagedDirectory, Path.Combine(stagedDirectory, "component.cat"), [publisher]);
 if (!staged.IsTrusted)
     throw new InvalidOperationException($"refusing {stagedDirectory}: {staged}");
+```
+
+On macOS:
+
+```csharp
+var team = new AppleTeam("ABCDE12345");
+var downloadedApp = MacCodeSignature.Verify(downloadedBundle, [team], requireNotarization: true);
+if (!downloadedApp.IsTrusted)
+    throw new InvalidOperationException($"refusing {downloadedBundle}: {downloadedApp}");
 ```
 
 ## License
