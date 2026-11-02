@@ -184,9 +184,10 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
     }
 
     /// <summary>Stops the current process — graceful step, window close, tree kill — and any scheduled restart.</summary>
-    public Task StopAsync(CancellationToken cancellationToken = default) => _disposed ? Task.CompletedTask : StopCoreAsync();
+    public Task<StopStage> StopAsync(CancellationToken cancellationToken = default) =>
+        _disposed ? Task.FromResult(StopStage.NotRunning) : StopCoreAsync();
 
-    private async Task StopCoreAsync()
+    private async Task<StopStage> StopCoreAsync()
     {
         try
         {
@@ -195,13 +196,13 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         catch (ObjectDisposedException)
         {
             // The dispose won the race and has already stopped everything.
-            return;
+            return StopStage.NotRunning;
         }
         await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
             SetState(ProcessState.Stopped);
-            await StopCurrentAsync(graceful: true).ConfigureAwait(false);
+            return await StopCurrentAsync(graceful: true).ConfigureAwait(false);
         }
         finally
         {
@@ -530,13 +531,16 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
 
     // Under the gate. Ends the current process, if any: the graceful step and the window's close when asked, then the
     // guardian's tree kill — and Process.Kill on the tree if a guardian configured not to force it left it running.
-    private async Task StopCurrentAsync(bool graceful)
+    // Answers the step that ended the child (see StopStage).
+    private async Task<StopStage> StopCurrentAsync(bool graceful)
     {
         var p = _process;
         _process = null;
-        if (p is null) return;
+        if (p is null) return StopStage.NotRunning;
+        var stage = StopStage.Killed;
         try
         {
+            if (p.HasExited) stage = StopStage.AlreadyExited;
             var stop = _options.Stop;
             if (graceful && !p.HasExited && stop.GracefulStop is { } step)
             {
@@ -545,6 +549,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
                 {
                     await step(p, budget.Token).WaitAsync(budget.Token).ConfigureAwait(false);
                     await p.WaitForExitAsync(budget.Token).ConfigureAwait(false);
+                    stage = StopStage.Graceful;
                 }
                 catch (OperationCanceledException)
                 {
@@ -560,7 +565,11 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
                 using var budget = new CancellationTokenSource(stop.CloseMainWindowTimeout, _clock);
                 try
                 {
-                    if (p.CloseMainWindow()) await p.WaitForExitAsync(budget.Token).ConfigureAwait(false);
+                    if (p.CloseMainWindow())
+                    {
+                        await p.WaitForExitAsync(budget.Token).ConfigureAwait(false);
+                        stage = StopStage.CloseWindow;
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -583,6 +592,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         {
             Release(p);
         }
+        return stage;
     }
 
     private void Release(Process p)

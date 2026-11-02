@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `DesktopHost.Processes`: `ProcessSupervisor.StopAsync` answers the step that ended the child — `StopStage` (`Graceful`: it left in
+  answer to `StopPolicy.GracefulStop`; `CloseWindow`; `Killed`: ended by force, by the guardian or the supervisor's own tree kill;
+  `AlreadyExited`; `NotRunning`). A caller that reports how a stop went (a shutdown record, telemetry) no longer has to infer it from
+  timing. It returned `Task` before: awaiting callers are unchanged; one that binds `StopAsync` to a `Func<Task>` still compiles.
 - `DesktopHost.Files`: `Trash.Move` on macOS. The item goes to the person's Trash through `-[NSFileManager trashItemAtURL:resultingItemURL:error:]`
   (reached by way of the Objective-C runtime, no native helper), so the system records where it came from and Finder's «Put Back»
   applies, and no Automation permission prompt is involved. The contract is the other platforms': it never deletes; a volume with no

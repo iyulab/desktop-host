@@ -114,6 +114,8 @@ which keeps them from outliving the host.
   `ReadyTimeout`, `RestartPolicy` (`Delays`, `StableAfter`, `IsPermanentExit`), `StopPolicy` (`GracefulStop`,
   `GracefulTimeout`, `CloseMainWindow`), `LivenessPolicy` (below), `Guardian` (share one per host), `ChildOutlivesSupervisor`
   (below), `Logger`, `StderrTailLines`.
+- `StopAsync` answers a `StopStage` — the step that ended the child: `Graceful` (it left in answer to `GracefulStop`), `CloseWindow`,
+  `Killed` (by force), `AlreadyExited` or `NotRunning` — for a caller that records how a stop went.
 - `LivenessPolicy` — for a child that can be alive and still not answer: your check (`Probe` — an HTTP path, a ping on a
   pipe) every `Period`, a miss when it says no, throws or takes longer than `Timeout`; `FailureThreshold` misses in a row
   (default 3; any answer starts the count over, misses inside `StartupGrace` after ready are not counted) stop the child as a

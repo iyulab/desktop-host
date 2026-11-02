@@ -132,6 +132,52 @@ public sealed class ProcessSupervisorTests
     }
 
     [Fact]
+    public async Task Stop_names_the_step_that_ended_the_child()
+    {
+        var started = new ConcurrentQueue<Process>();
+
+        // A child that honours the graceful step: Graceful.
+        await using (var graceful = new ProcessSupervisor(Options(() => Child("ready", "echo"), o =>
+        {
+            o.Ready = ReadyLine(started);
+            o.Stop.GracefulTimeout = TimeSpan.FromSeconds(30);
+            o.Stop.GracefulStop = async (p, ct) =>
+            {
+                await p.StandardInput.WriteLineAsync("stop".AsMemory(), ct);
+                await p.StandardInput.FlushAsync(ct);
+            };
+        })))
+        {
+            await graceful.StartAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(StopStage.Graceful, await graceful.StopAsync(TestContext.Current.CancellationToken));
+            Assert.Equal(StopStage.NotRunning, await graceful.StopAsync(TestContext.Current.CancellationToken));
+        }
+
+        // A child with no graceful step is ended by force: Killed.
+        await using (var forced = new ProcessSupervisor(Options(() => Child("ready", "sleep"), o => o.Ready = ReadyLine(started))))
+        {
+            await forced.StartAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(StopStage.Killed, await forced.StopAsync(TestContext.Current.CancellationToken));
+        }
+
+        // A child that ignores the graceful step within its time is ended by force too.
+        await using (var stubborn = new ProcessSupervisor(Options(() => Child("ready", "ignore-stop"), o =>
+        {
+            o.Ready = ReadyLine(started);
+            o.Stop.GracefulTimeout = TimeSpan.FromMilliseconds(300);
+            o.Stop.GracefulStop = async (p, ct) =>
+            {
+                await p.StandardInput.WriteLineAsync("stop".AsMemory(), ct);
+                await p.StandardInput.FlushAsync(ct);
+            };
+        })))
+        {
+            await stubborn.StartAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(StopStage.Killed, await stubborn.StopAsync(TestContext.Current.CancellationToken));
+        }
+    }
+
+    [Fact]
     public async Task A_child_that_ignores_the_graceful_step_is_killed_when_its_time_is_up()
     {
         var started = new ConcurrentQueue<Process>();
