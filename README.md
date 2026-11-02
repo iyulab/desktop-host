@@ -16,7 +16,7 @@ quiet ways:
 - **Its own health** — noticing when its thread pool stops starting work, the state in which it
   answers nothing yet looks alive to itself
 
-**Status:** 0.5.0 — `DesktopHost.Files`, `DesktopHost.Logging`, `DesktopHost.Processes`, `DesktopHost.Signatures` and
+**Status:** 0.6.0 — `DesktopHost.Files`, `DesktopHost.Logging`, `DesktopHost.Processes`, `DesktopHost.Signatures` and
 `DesktopHost.Diagnostics` on NuGet, one version for all; what `main` adds since is under `[Unreleased]` in the
 [changelog](CHANGELOG.md).
 See [SCOPE.md](SCOPE.md) for what belongs here.
