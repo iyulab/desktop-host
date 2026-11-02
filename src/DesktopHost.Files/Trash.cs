@@ -1,7 +1,7 @@
 namespace DesktopHost.Files;
 
 /// <summary>
-/// Moves a file or folder to the platform's trash — the Recycle Bin on Windows, the freedesktop.org home trash on Linux — so the
+/// Moves a file or folder to the platform's trash — the Recycle Bin on Windows, the freedesktop.org home trash on Linux, the Trash on macOS — so the
 /// person can restore it. Never deletes: an item the platform would not keep in its trash is left where it is, and the call
 /// throws.
 /// </summary>
@@ -18,6 +18,11 @@ namespace DesktopHost.Files;
 /// trash gets a numbered suffix. A folder on another file system than the home trash is refused (the specification's
 /// per-volume trash is not implemented); a file there is copied and removed by the runtime's own move.
 /// </para>
+/// <para>
+/// On macOS the move is the system's own (<c>NSFileManager trashItemAtURL</c>, reached through the Objective-C runtime): the
+/// system keeps the item's original place, so Finder's «Put Back» works, and no permission prompt is involved. A volume with no
+/// Trash leaves the item where it is and <see cref="TrashException"/> says <see cref="TrashException.NotRecyclable"/>.
+/// </para>
 /// </remarks>
 public static class Trash
 {
@@ -26,7 +31,7 @@ public static class Trash
     /// <exception cref="ArgumentException">The path is empty or not absolute.</exception>
     /// <exception cref="FileNotFoundException">Nothing is at the path.</exception>
     /// <exception cref="TrashException">The platform did not move it to its trash; the item is where it was.</exception>
-    /// <exception cref="PlatformNotSupportedException">This platform's trash is not supported yet (macOS).</exception>
+    /// <exception cref="PlatformNotSupportedException">This platform has no trash this package can use.</exception>
     public static void Move(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -40,6 +45,8 @@ public static class Trash
             WindowsRecycleBin.Move(full);
         else if (OperatingSystem.IsLinux())
             FreedesktopTrash.Move(full, FreedesktopTrash.HomeTrash());
+        else if (OperatingSystem.IsMacOS())
+            _ = MacTrash.Move(full);
         else
             throw new PlatformNotSupportedException("Moving to the trash is not supported on this platform yet.");
     }

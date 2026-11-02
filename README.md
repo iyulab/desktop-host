@@ -61,8 +61,9 @@ Durable file writes and the reads that go with them.
   attempt is made when it closes, nothing waits past it. The Tauri kit's file crate retries by the same rule, and both run
   one case table (`tests/DesktopHost.Files.Tests/cases/file-retry.json`).
 - `FileLockHolders` — name the processes holding a file open (Windows Restart Manager; empty elsewhere).
-- `Trash` — move a file or folder to the Recycle Bin (Windows, the shell's own operation with no dialogs) or the
-  freedesktop.org home trash (Linux), so the person can restore it. It never deletes: an item the platform would not keep
+- `Trash` — move a file or folder to the Recycle Bin (Windows, the shell's own operation with no dialogs), the
+  freedesktop.org home trash (Linux) or the Trash (macOS, the system's own move, so Finder's «Put Back» applies), so the person
+  can restore it. It never deletes: an item the platform would not keep
   in its bin — too large, a drive without one — stays where it is and `TrashException` says why.
 
 ```csharp

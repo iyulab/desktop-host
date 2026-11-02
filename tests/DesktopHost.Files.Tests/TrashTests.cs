@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Text;
 
 namespace DesktopHost.Files.Tests;
@@ -23,6 +24,56 @@ public sealed class TrashTests : IDisposable
     {
         Assert.Throws<ArgumentException>(() => Trash.Move("relative.txt"));
         Assert.Throws<FileNotFoundException>(() => Trash.Move(Path.Combine(_root, "never-made.txt")));
+    }
+
+    // --- the macOS Trash (the system's own move, so it runs on a Mac only) ---
+
+    [Fact]
+    [SupportedOSPlatform("macos")]
+    public void On_a_Mac_a_file_leaves_its_folder_and_the_system_names_where_it_went()
+    {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "the macOS Trash");
+        var item = Path.Combine(_root, "work", "a report " + Guid.NewGuid().ToString("N") + ".txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(item)!);
+        File.WriteAllText(item, "content");
+
+        var landed = MacTrash.Move(item);
+        try
+        {
+            Assert.False(File.Exists(item));
+            Assert.NotEqual(item, landed);
+            Assert.Contains(".Trash", landed);
+            Assert.Equal("content", File.ReadAllText(landed));
+        }
+        finally
+        {
+            try { File.Delete(landed); }
+            catch (IOException) { /* the Trash is the person's; one file of the test left in it is no harm */ }
+        }
+    }
+
+    [Fact]
+    public void On_a_Mac_a_folder_moves_whole_through_the_public_call_and_a_missing_item_is_still_not_found()
+    {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "the macOS Trash");
+        var folder = Path.Combine(_root, "photos " + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "p.jpg"), "x");
+
+        try
+        {
+            Trash.Move(folder);
+
+            Assert.False(Directory.Exists(folder));
+            Assert.Throws<FileNotFoundException>(() => Trash.Move(folder));
+        }
+        finally
+        {
+            // The name carries a fresh GUID, so the folder in the Trash is this test's alone.
+            var landed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".Trash", Path.GetFileName(folder));
+            try { if (Directory.Exists(landed)) Directory.Delete(landed, recursive: true); }
+            catch (IOException) { /* the Trash is the person's; one folder of the test left in it is no harm */ }
+        }
     }
 
     // --- the freedesktop.org home trash (the logic is file moves, so it runs on every platform) ---

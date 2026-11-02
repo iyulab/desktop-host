@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `DesktopHost.Files`: `Trash.Move` on macOS. The item goes to the person's Trash through `-[NSFileManager trashItemAtURL:resultingItemURL:error:]`
+  (reached by way of the Objective-C runtime, no native helper), so the system records where it came from and Finder's «Put Back»
+  applies, and no Automation permission prompt is involved. The contract is the other platforms': it never deletes; a volume with no
+  Trash leaves the item where it is and `TrashException` says `NotRecyclable`; any other refusal is `Refused`. It was
+  `PlatformNotSupportedException` on a Mac before.
+
 ## [0.6.0] - 2026-11-02
 
 ### Added
