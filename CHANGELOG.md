@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-03
+
 ### Added
 
 - `DesktopHost.Processes`: `ProcessSupervisor.StopAsync` answers the step that ended the child — `StopStage` (`Graceful`: it left in
@@ -141,7 +143,8 @@ All notable changes to this project are documented here. The format follows
   best-effort `TryDeleteFile` / `TryDeleteDirectory`.
 - `DesktopHost.Files`: `FileLockHolders` — names the processes holding a file open, via the Windows Restart Manager.
 
-[Unreleased]: https://github.com/iyulab/desktop-host/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/iyulab/desktop-host/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/iyulab/desktop-host/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/iyulab/desktop-host/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/iyulab/desktop-host/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/iyulab/desktop-host/compare/v0.3.0...v0.4.0
