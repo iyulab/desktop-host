@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Build
+
+- Packages are pushed to nuget.org by the organization's central publisher (trusted publishing) instead of with a stored API
+  key: the publish workflow builds, tests and packs, hands the packages over as an artifact, and tags the version only after
+  the push succeeded — a failed push is retried by re-running the workflow.
+
 ### Changed
 
 - **Breaking** — `ProcessSupervisor.GaveUp` raises a `GiveUpReason` instead of a string: `Kind` (`NoCommand`, `StartFailed`,

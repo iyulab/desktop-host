@@ -15,11 +15,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  # Builds, tests and packs; the push itself runs in the organization's central publisher (the job below),
+  # which holds the only nuget.org trust policy — this repository keeps no NuGet credential.
+  pack:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write   # push the version tag
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      exists: ${{ steps.check_tag.outputs.exists }}
 
     steps:
     - uses: actions/checkout@v4
@@ -75,12 +80,36 @@ jobs:
         done
         [ "$missing" -eq 0 ]
 
-    - name: Push to NuGet
+    # The central publisher accepts only .nupkg / .snupkg files in this artifact.
+    - name: Upload the packages
       if: steps.check_tag.outputs.exists == 'false'
-      run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-packages
+        path: |
+          nupkg/*.nupkg
+          nupkg/*.snupkg
+        if-no-files-found: error
+        retention-days: 1
+
+  publish:
+    needs: pack
+    if: needs.pack.outputs.exists == 'false'
+    uses: iyulab/nuget-publish/.github/workflows/request.yml@de1e58c8bcefaf88f497fcb58899a1c6e84f4e29 # main
+    permissions: {}
+    secrets: inherit
+
+  # Tagged only after the push succeeded, so a failed publish is retried by re-running this workflow.
+  tag:
+    needs: [ pack, publish ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write   # push the version tag
+    steps:
+    - uses: actions/checkout@v4
 
     - name: Tag the version
-      if: steps.check_tag.outputs.exists == 'false'
       run: |
-        git tag "v${{ steps.version.outputs.version }}"
-        git push origin "v${{ steps.version.outputs.version }}"
+        git tag "v${{ needs.pack.outputs.version }}"
+        git push origin "v${{ needs.pack.outputs.version }}"
