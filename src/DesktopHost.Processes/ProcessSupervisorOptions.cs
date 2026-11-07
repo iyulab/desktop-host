@@ -23,6 +23,15 @@ public sealed class RestartPolicy
     /// predicate.
     /// </summary>
     public Func<int, bool>? IsPermanentExit { get; set; }
+
+    /// <summary>
+    /// Whether a run that never became ready — <see cref="ProcessSupervisorOptions.Ready"/> failed or
+    /// <see cref="ProcessSupervisorOptions.ReadyTimeout"/> passed — is started again like any failed run. Default on. Off
+    /// gives up at once (<see cref="GiveUpKind.Permanent"/> with <see cref="RunFailure.NotReady"/>): for a child whose
+    /// readiness wait is long, or whose caller has a better answer than another start (a rollback after an update), a
+    /// second wait of the same length only delays it. A run that was ready and later stopped answering is not affected.
+    /// </summary>
+    public bool RestartAfterNotReady { get; set; } = true;
 }
 
 /// <summary>How a running child is stopped: the caller's own way first, then the window's close, then the tree.</summary>

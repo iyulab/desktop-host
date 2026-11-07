@@ -475,7 +475,9 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
             UnexpectedExits++;
             var uptime = _clock.GetUtcNow() - _lastStart;
             if (uptime >= _options.Restart.StableAfter) _consecutiveFailures = 0;
-            var permanent = _runFailure is null && _options.Restart.IsPermanentExit?.Invoke(code) == true;
+            var permanent = _runFailure is null
+                ? _options.Restart.IsPermanentExit?.Invoke(code) == true
+                : _runFailureKind == RunFailure.NotReady && !_options.Restart.RestartAfterNotReady;
             var delays = _options.Restart.Delays;
             var restart = !permanent && _consecutiveFailures < delays.Count;
             var cause = _runFailure ?? $"exited with code {code}";
@@ -490,7 +492,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
                     : delays.Count == 0
                         ? cause
                         : $"{cause}; {_consecutiveFailures + 1} failed runs in a row";
-                GiveUp(new GiveUpReason(permanent ? GiveUpKind.PermanentExit : GiveUpKind.RestartLimit, message, code, _runFailureKind));
+                GiveUp(new GiveUpReason(permanent ? GiveUpKind.Permanent : GiveUpKind.RestartLimit, message, code, _runFailureKind));
                 return;
             }
 

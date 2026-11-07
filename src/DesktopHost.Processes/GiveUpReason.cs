@@ -9,8 +9,12 @@ public enum GiveUpKind
     /// <summary>The operating system could not start the command (a missing file, no permission).</summary>
     StartFailed,
 
-    /// <summary>The child exited with a code <see cref="RestartPolicy.IsPermanentExit"/> calls permanent: a new start would end the same way.</summary>
-    PermanentExit,
+    /// <summary>
+    /// The policy says a new start would end the same way: the child exited with a code <see cref="RestartPolicy.IsPermanentExit"/>
+    /// calls permanent, or it never became ready and <see cref="RestartPolicy.RestartAfterNotReady"/> is off
+    /// (<see cref="GiveUpReason.LastRunFailure"/> tells the two apart).
+    /// </summary>
+    Permanent,
 
     /// <summary>The child's runs failed more times in a row than <see cref="RestartPolicy.Delays"/> allows starts.</summary>
     RestartLimit,

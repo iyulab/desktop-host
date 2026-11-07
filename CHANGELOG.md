@@ -9,11 +9,19 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - **Breaking** — `ProcessSupervisor.GaveUp` raises a `GiveUpReason` instead of a string: `Kind` (`NoCommand`, `StartFailed`,
-  `PermanentExit`, `RestartLimit`), the last run's `ExitCode`, and `LastRunFailure` (`None`, `NotReady`, `Unresponsive` — how the
+  `Permanent`, `RestartLimit`), the last run's `ExitCode`, and `LastRunFailure` (`None`, `NotReady`, `Unresponsive` — how the
   supervisor judged the run failed while it still ran), with `Message` the sentence the event used to carry (still
   `LastError`; `ToString()` returns it). A caller that maps giving up onto its own outcomes — a rollback after an update, a
   status it reports — no longer parses the sentence. Migration: `GaveUp += reason => …` keeps compiling where `reason` is only
   logged or interpolated; where it was compared as text, compare `reason.Kind` / `reason.LastRunFailure`.
+
+### Added
+
+- `RestartPolicy.RestartAfterNotReady` (default on, today's behaviour): off, a run that never became ready — `Ready` failed or
+  `ReadyTimeout` passed — is not started again; the supervisor gives up at once with `Permanent` and `NotReady`. For a child
+  whose readiness wait is long, or whose caller answers a failed start better than another start would (a rollback after an
+  update), a second wait of the same length only delays that answer. A run that was ready and later stopped answering
+  `Liveness` still restarts per `Delays`.
 
 ## [0.7.0] - 2026-11-03
 

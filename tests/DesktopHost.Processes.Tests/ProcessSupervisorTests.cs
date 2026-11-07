@@ -270,6 +270,7 @@ public sealed class ProcessSupervisorTests
         {
             o.Ready = ReadyLine(new ConcurrentQueue<Process>());
             o.Liveness = Liveness(probe.Probe);
+            o.Restart.RestartAfterNotReady = false; // concerns a run that was never ready, not one that stopped answering
         }));
         supervisor.StateChanged += s => { if (s == ProcessState.Restarting) reasons.Enqueue(supervisor.LastError ?? ""); };
 
@@ -406,7 +407,7 @@ public sealed class ProcessSupervisorTests
 
         Assert.Equal(0, supervisor.Restarts);
         Assert.Contains("would not change", reason.Message, StringComparison.Ordinal);
-        Assert.Equal(GiveUpKind.PermanentExit, reason.Kind);
+        Assert.Equal(GiveUpKind.Permanent, reason.Kind);
         Assert.Equal(RunFailure.None, reason.LastRunFailure);
     }
 
@@ -458,6 +459,26 @@ public sealed class ProcessSupervisorTests
         Assert.Equal((GiveUpKind.RestartLimit, RunFailure.NotReady), (reason.Kind, reason.LastRunFailure));
         Assert.Equal(ProcessState.Failed, supervisor.State);
         Assert.Null(supervisor.Pid);
+    }
+
+    [Fact]
+    public async Task A_run_that_never_became_ready_is_not_started_again_when_the_policy_says_so()
+    {
+        var gaveUp = new TaskCompletionSource<GiveUpReason>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("echo"), o =>
+        {
+            o.Restart.RestartAfterNotReady = false; // the delays below would otherwise start it twice more
+            o.ReadyTimeout = TimeSpan.FromMilliseconds(300);
+            o.Ready = (_, _) => new TaskCompletionSource().Task;
+        }));
+        supervisor.GaveUp += reason => gaveUp.TrySetResult(reason);
+
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+        var reason = await gaveUp.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((GiveUpKind.Permanent, RunFailure.NotReady), (reason.Kind, reason.LastRunFailure));
+        Assert.Equal(0, supervisor.Restarts);
+        Assert.Equal(ProcessState.Failed, supervisor.State);
     }
 
     [Fact]
