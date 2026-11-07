@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking** — `ProcessSupervisor.GaveUp` raises a `GiveUpReason` instead of a string: `Kind` (`NoCommand`, `StartFailed`,
+  `PermanentExit`, `RestartLimit`), the last run's `ExitCode`, and `LastRunFailure` (`None`, `NotReady`, `Unresponsive` — how the
+  supervisor judged the run failed while it still ran), with `Message` the sentence the event used to carry (still
+  `LastError`; `ToString()` returns it). A caller that maps giving up onto its own outcomes — a rollback after an update, a
+  status it reports — no longer parses the sentence. Migration: `GaveUp += reason => …` keeps compiling where `reason` is only
+  logged or interpolated; where it was compared as text, compare `reason.Kind` / `reason.LastRunFailure`.
+
 ## [0.7.0] - 2026-11-03
 
 ### Added

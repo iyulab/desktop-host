@@ -68,6 +68,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
     private int _consecutiveFailures;
     private DateTimeOffset _lastStart;
     private string? _runFailure;
+    private RunFailure _runFailureKind;
     private int? _exitCodeAtKill;
 
     /// <summary>Creates a supervisor. Nothing starts until <see cref="StartAsync"/>.</summary>
@@ -129,8 +130,8 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
     /// <summary>Raised after each unexpected exit, with the exit code and whether a new start is scheduled.</summary>
     public event Action<int, bool>? Exited;
 
-    /// <summary>Raised when the supervisor gives up, with the reason (also in <see cref="LastError"/>).</summary>
-    public event Action<string>? GaveUp;
+    /// <summary>Raised when the supervisor gives up, with the reason (its sentence is also <see cref="LastError"/>).</summary>
+    public event Action<GiveUpReason>? GaveUp;
 
     /// <summary>Raised for every non-empty standard-error line of the current process, after it was logged.</summary>
     public event Action<string>? StderrLine;
@@ -242,7 +243,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         var command = _options.Command!();
         if (command is null)
         {
-            GiveUp("there is no command to run");
+            GiveUp(new GiveUpReason(GiveUpKind.NoCommand, "there is no command to run"));
             LogNoCommand(_logger, _options.Name);
             return;
         }
@@ -271,7 +272,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             LogStartFailed(_logger, ex, _options.Name, command.FileName);
-            GiveUp($"could not start {command.FileName}: {ex.Message}");
+            GiveUp(new GiveUpReason(GiveUpKind.StartFailed, $"could not start {command.FileName}: {ex.Message}"));
             return;
         }
 
@@ -279,6 +280,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         _process = process;
         _lastStart = _clock.GetUtcNow();
         _runFailure = null;
+        _runFailureKind = RunFailure.None;
         _exitCodeAtKill = null;
         LastError = null;
         Restarts = generation - 1;
@@ -312,14 +314,14 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
             }
             catch (OperationCanceledException) when (timeout.IsCancellationRequested)
             {
-                FailRun(generation, $"not ready within {_options.ReadyTimeout!.Value.TotalSeconds:0.#} s");
+                FailRun(generation, RunFailure.NotReady, $"not ready within {_options.ReadyTimeout!.Value.TotalSeconds:0.#} s");
                 await StopCurrentAsync(graceful: false).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex)
             {
                 LogReadyFailed(_logger, ex, _options.Name);
-                FailRun(generation, $"not ready: {ex.Message}");
+                FailRun(generation, RunFailure.NotReady, $"not ready: {ex.Message}");
                 await StopCurrentAsync(graceful: false).ConfigureAwait(false);
                 return;
             }
@@ -379,7 +381,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
                 try
                 {
                     if (generation != _generation || State != ProcessState.Running || !ReferenceEquals(_process, process)) return;
-                    FailRun(generation, $"stopped answering: {misses} liveness checks missed in a row");
+                    FailRun(generation, RunFailure.Unresponsive, $"stopped answering: {misses} liveness checks missed in a row");
                     await StopCurrentAsync(graceful: true).ConfigureAwait(false);
                 }
                 finally
@@ -401,10 +403,11 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
 
     // The process is killed next; its watcher sees the exit and applies the restart policy with this reason (a run that
     // failed this way is never a permanent exit — the exit code is the kill's, not the child's).
-    private void FailRun(int generation, string reason)
+    private void FailRun(int generation, RunFailure kind, string reason)
     {
         if (generation != _generation) return;
         _runFailure = reason;
+        _runFailureKind = kind;
         LastError = reason;
     }
 
@@ -482,11 +485,12 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
 
             if (!restart)
             {
-                GiveUp(permanent
+                var message = permanent
                     ? $"{cause}, which a new start would not change"
                     : delays.Count == 0
                         ? cause
-                        : $"{cause}; {_consecutiveFailures + 1} failed runs in a row");
+                        : $"{cause}; {_consecutiveFailures + 1} failed runs in a row";
+                GiveUp(new GiveUpReason(permanent ? GiveUpKind.PermanentExit : GiveUpKind.RestartLimit, message, code, _runFailureKind));
                 return;
             }
 
@@ -601,11 +605,11 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         p.Dispose();
     }
 
-    private void GiveUp(string reason)
+    private void GiveUp(GiveUpReason reason)
     {
-        LastError = reason;
+        LastError = reason.Message;
         SetState(ProcessState.Failed);
-        LogGaveUp(_logger, _options.Name, reason);
+        LogGaveUp(_logger, _options.Name, reason.Message);
         _pendingEvents.Add(() => GaveUp?.Invoke(reason));
     }
 

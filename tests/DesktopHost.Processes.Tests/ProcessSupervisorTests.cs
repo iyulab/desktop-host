@@ -223,7 +223,7 @@ public sealed class ProcessSupervisorTests
     public async Task Unexpected_exits_start_the_child_again_until_the_delays_run_out()
     {
         var exits = new ConcurrentQueue<(int Code, bool WillRestart)>();
-        var gaveUp = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gaveUp = new TaskCompletionSource<GiveUpReason>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var supervisor = new ProcessSupervisor(Options(() => Child("exit", "3")));
         supervisor.Exited += (code, restart) => exits.Enqueue((code, restart));
         supervisor.GaveUp += reason => gaveUp.TrySetResult(reason);
@@ -235,8 +235,9 @@ public sealed class ProcessSupervisorTests
         Assert.Equal(ProcessState.Failed, supervisor.State);
         Assert.Equal(3, supervisor.UnexpectedExits);
         Assert.Equal(2, supervisor.Restarts);
-        Assert.Contains("exited with code 3", reason, StringComparison.Ordinal);
-        Assert.Equal(reason, supervisor.LastError);
+        Assert.Contains("exited with code 3", reason.Message, StringComparison.Ordinal);
+        Assert.Equal(reason.Message, supervisor.LastError);
+        Assert.Equal(new GiveUpReason(GiveUpKind.RestartLimit, reason.Message, 3, RunFailure.None), reason);
     }
 
     // A probe that answers from a switch the test flips: alive while it is on, a miss while it is off.
@@ -284,6 +285,27 @@ public sealed class ProcessSupervisorTests
         Assert.Equal(1, supervisor.UnexpectedExits);
         Assert.True(reasons.TryPeek(out var reason));
         Assert.Contains("3 liveness checks missed in a row", reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_child_that_stops_answering_with_no_starts_left_gives_up_as_unresponsive()
+    {
+        var probe = new Switch();
+        var gaveUp = new TaskCompletionSource<GiveUpReason>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("ready", "echo"), o =>
+        {
+            o.Ready = ReadyLine(new ConcurrentQueue<Process>());
+            o.Liveness = Liveness(probe.Probe);
+            o.Restart.Delays = [];
+        }));
+        supervisor.GaveUp += reason => gaveUp.TrySetResult(reason);
+
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+        probe.Alive = false;
+        var reason = await gaveUp.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((GiveUpKind.RestartLimit, RunFailure.Unresponsive), (reason.Kind, reason.LastRunFailure));
+        Assert.Contains("liveness checks missed in a row", reason.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -374,7 +396,7 @@ public sealed class ProcessSupervisorTests
     [Fact]
     public async Task A_permanent_exit_code_is_not_retried()
     {
-        var gaveUp = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gaveUp = new TaskCompletionSource<GiveUpReason>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var supervisor = new ProcessSupervisor(Options(() => Child("exit", "7"),
             o => o.Restart.IsPermanentExit = code => code == 7));
         supervisor.GaveUp += reason => gaveUp.TrySetResult(reason);
@@ -383,7 +405,9 @@ public sealed class ProcessSupervisorTests
         var reason = await gaveUp.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal(0, supervisor.Restarts);
-        Assert.Contains("would not change", reason, StringComparison.Ordinal);
+        Assert.Contains("would not change", reason.Message, StringComparison.Ordinal);
+        Assert.Equal(GiveUpKind.PermanentExit, reason.Kind);
+        Assert.Equal(RunFailure.None, reason.LastRunFailure);
     }
 
     [Fact]
@@ -415,7 +439,7 @@ public sealed class ProcessSupervisorTests
     public async Task A_ready_hook_that_throws_kills_the_child_and_counts_as_a_failed_run()
     {
         var started = new ConcurrentQueue<Process>();
-        var gaveUp = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gaveUp = new TaskCompletionSource<GiveUpReason>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var supervisor = new ProcessSupervisor(Options(() => Child("echo"), o =>
         {
             o.Restart.Delays = [];
@@ -430,7 +454,8 @@ public sealed class ProcessSupervisorTests
         await supervisor.StartAsync(TestContext.Current.CancellationToken);
         var reason = await gaveUp.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-        Assert.Equal("not ready: boom", reason);
+        Assert.Equal("not ready: boom", reason.Message);
+        Assert.Equal((GiveUpKind.RestartLimit, RunFailure.NotReady), (reason.Kind, reason.LastRunFailure));
         Assert.Equal(ProcessState.Failed, supervisor.State);
         Assert.Null(supervisor.Pid);
     }
@@ -438,7 +463,7 @@ public sealed class ProcessSupervisorTests
     [Fact]
     public async Task A_ready_hook_that_never_returns_times_out()
     {
-        var gaveUp = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gaveUp = new TaskCompletionSource<GiveUpReason>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var supervisor = new ProcessSupervisor(Options(() => Child("echo"), o =>
         {
             o.Restart.Delays = [];
@@ -450,7 +475,8 @@ public sealed class ProcessSupervisorTests
         await supervisor.StartAsync(TestContext.Current.CancellationToken);
         var reason = await gaveUp.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-        Assert.Equal("not ready within 0.3 s", reason);
+        Assert.Equal("not ready within 0.3 s", reason.Message);
+        Assert.Equal((GiveUpKind.RestartLimit, RunFailure.NotReady), (reason.Kind, reason.LastRunFailure));
     }
 
     [Fact]
@@ -492,11 +518,14 @@ public sealed class ProcessSupervisorTests
     public async Task No_command_fails_with_the_reason()
     {
         await using var supervisor = new ProcessSupervisor(Options(() => null));
+        GiveUpReason? reason = null;
+        supervisor.GaveUp += r => reason = r;
 
         await supervisor.StartAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(ProcessState.Failed, supervisor.State);
         Assert.Equal("there is no command to run", supervisor.LastError);
+        Assert.Equal(new GiveUpReason(GiveUpKind.NoCommand, "there is no command to run"), reason);
     }
 
     [Fact]
@@ -504,11 +533,15 @@ public sealed class ProcessSupervisorTests
     {
         await using var supervisor = new ProcessSupervisor(Options(() =>
             new SupervisedCommand(Path.Combine(AppContext.BaseDirectory, "no-such-program"), [], SupervisedCommand.SafeEnvironment())));
+        GiveUpReason? reason = null;
+        supervisor.GaveUp += r => reason = r;
 
         await supervisor.StartAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(ProcessState.Failed, supervisor.State);
         Assert.StartsWith("could not start ", supervisor.LastError, StringComparison.Ordinal);
+        Assert.Equal(GiveUpKind.StartFailed, reason?.Kind);
+        Assert.Null(reason?.ExitCode);
     }
 
     [Fact]
