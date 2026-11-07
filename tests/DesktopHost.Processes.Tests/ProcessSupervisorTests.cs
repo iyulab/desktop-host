@@ -566,6 +566,58 @@ public sealed class ProcessSupervisorTests
     }
 
     [Fact]
+    public async Task Starting_is_raised_while_the_ready_hook_still_waits_and_a_second_start_waits_for_the_first()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var starting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var states = new ConcurrentQueue<ProcessState>();
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("echo"), o => o.Ready = (_, ct) => release.Task.WaitAsync(ct)));
+        supervisor.StateChanged += s =>
+        {
+            states.Enqueue(s);
+            if (s == ProcessState.Starting) starting.TrySetResult();
+        };
+
+        var first = supervisor.StartAsync(TestContext.Current.CancellationToken);
+        await starting.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        var second = supervisor.StartAsync(TestContext.Current.CancellationToken);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+        Assert.Equal(ProcessState.Starting, supervisor.State);
+
+        release.SetResult();
+        await Task.WhenAll(first, second).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProcessState.Running, supervisor.State);
+        Assert.Equal([ProcessState.Starting, ProcessState.Running], states.ToArray());
+        Assert.Equal(0, supervisor.Restarts);
+    }
+
+    [Fact]
+    public async Task A_stop_while_the_ready_hook_waits_ends_the_child_at_once()
+    {
+        var starting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("echo"), o =>
+        {
+            o.ReadyTimeout = null;
+            o.Ready = (_, _) => new TaskCompletionSource().Task; // ignores its token on purpose
+        }));
+        supervisor.StateChanged += s => { if (s == ProcessState.Starting) starting.TrySetResult(); };
+
+        var start = supervisor.StartAsync(TestContext.Current.CancellationToken);
+        await starting.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        var pid = supervisor.Pid!.Value;
+
+        var stage = await supervisor.StopAsync(TestContext.Current.CancellationToken).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await start.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(StopStage.Killed, stage);
+        Assert.Equal(ProcessState.Stopped, supervisor.State);
+        Assert.True(IsGone(pid));
+    }
+
+    [Fact]
     public async Task A_restart_on_request_replaces_the_child_without_counting_an_unexpected_exit()
     {
         var started = new ConcurrentQueue<Process>();

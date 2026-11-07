@@ -25,6 +25,11 @@ All notable changes to this project are documented here. The format follows
   noticed or `ReadyTimeout` passed, and the run counted as not ready: a long readiness limit held a dead child's start for its
   whole length, and with `RestartAfterNotReady` off a crash at start-up read as «never ready».
 
+- `StateChanged(Starting)` is raised as the process starts, while `Ready` still waits — it used to reach handlers only when the start
+  had ended, together with `Running` (or the failure), so a caller that shows a starting state never saw it while it was true. The
+  ready wait now runs without the supervisor's lock: a `StopAsync` during it ends the child at once instead of waiting for the hook to
+  notice, and a second `StartAsync` returns when the first start does (it waited on the lock before; it still does not start another).
+
 ### Added
 
 - `ProcessSupervisorOptions.OutputEncoding` — how the child's standard output and error are decoded. Unset keeps the platform's

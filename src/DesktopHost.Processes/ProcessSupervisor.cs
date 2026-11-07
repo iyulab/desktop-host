@@ -71,6 +71,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
     private RunFailure _runFailureKind;
     private int? _exitCodeAtKill;
     private StopStage? _runStopStage;
+    private Task? _startInFlight;
 
     /// <summary>Creates a supervisor. Nothing starts until <see cref="StartAsync"/>.</summary>
     /// <exception cref="ArgumentException">A required option is missing or out of range.</exception>
@@ -139,16 +140,24 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
 
     /// <summary>
     /// Starts the child and returns once it is ready, failed, or scheduled to start again. Does nothing while a process
-    /// is starting or running.
+    /// is running; while one is starting, returns when that start does. <see cref="StateChanged"/> raises
+    /// <see cref="ProcessState.Starting"/> as the process starts, before <see cref="ProcessSupervisorOptions.Ready"/> returns.
     /// </summary>
     /// <exception cref="OperationCanceledException">The caller cancelled before the process was ready; it was killed.</exception>
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        Task? inFlight = null;
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (State is ProcessState.Running or ProcessState.Starting) return;
+            if (State == ProcessState.Running) return;
+            if (State == ProcessState.Starting)
+            {
+                // Another start is waiting for its process to be ready; this one returns when that one does.
+                inFlight = _startInFlight;
+                return;
+            }
             if (_lifetime.IsCancellationRequested)
             {
                 // A stop ended the last process's watchers through this source; the next one needs a live source.
@@ -161,6 +170,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         finally
         {
             ReleaseGate();
+            if (inFlight is not null) await inFlight.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -305,44 +315,67 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
             using var readyDone = new CancellationTokenSource();
             _ = CancelWhenExitedAsync(process, gone, readyDone.Token);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime, timeout.Token, gone.Token);
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _startInFlight = started.Task;
+            Exception? failure = null;
+
+            // The wait runs with the gate released: Starting reaches handlers now, while it is true, and a stop, the exit watcher
+            // or a dispose can act on this process meanwhile. What they did is read back once the gate is held again.
+            ReleaseGate();
             try
             {
                 await ready(process, linked.Token).WaitAsync(linked.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
-            {
-                // A stop is waiting for the gate; it ends this process.
-                return;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                await StopCurrentAsync(graceful: false).ConfigureAwait(false);
-                SetState(ProcessState.Stopped);
-                throw;
-            }
-            catch (Exception ex) when (HasExited(process))
-            {
-                // The child ended while it was being waited for — the hook saw its pipes close, or the exit cancelled it. That
-                // is an exit, judged by its code once the gate is released; the exit watcher owns it.
-                LogExitedBeforeReady(_logger, ex, _options.Name, generation);
-                return;
-            }
-            catch (OperationCanceledException) when (timeout.IsCancellationRequested)
-            {
-                FailRun(generation, RunFailure.NotReady, $"not ready within {_options.ReadyTimeout!.Value.TotalSeconds:0.#} s");
-                _runStopStage = await StopCurrentAsync(graceful: false).ConfigureAwait(false);
-                return;
-            }
             catch (Exception ex)
             {
-                LogReadyFailed(_logger, ex, _options.Name);
-                FailRun(generation, RunFailure.NotReady, $"not ready: {ex.Message}");
-                _runStopStage = await StopCurrentAsync(graceful: false).ConfigureAwait(false);
-                return;
+                failure = ex;
             }
             finally
             {
                 readyDone.Cancel();
+                await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
+            try
+            {
+                if (generation != _generation || !ReferenceEquals(_process, process))
+                {
+                    // Stopped, replaced, or its exit already handled while the gate was free: that owner reported it.
+                    if (failure is OperationCanceledException && cancellationToken.IsCancellationRequested) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
+                    return;
+                }
+                switch (failure)
+                {
+                    case null:
+                        break;
+                    case OperationCanceledException when lifetime.IsCancellationRequested:
+                        // A stop is waiting for the gate; it ends this process.
+                        return;
+                    case OperationCanceledException when cancellationToken.IsCancellationRequested:
+                        await StopCurrentAsync(graceful: false).ConfigureAwait(false);
+                        SetState(ProcessState.Stopped);
+                        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
+                        return; // not reached
+                    case var _ when HasExited(process):
+                        // The child ended while it was being waited for — the hook saw its pipes close, or the exit cancelled
+                        // it. That is an exit, judged by its code once the gate is released; the exit watcher owns it.
+                        LogExitedBeforeReady(_logger, failure, _options.Name, generation);
+                        return;
+                    case OperationCanceledException when timeout.IsCancellationRequested:
+                        FailRun(generation, RunFailure.NotReady, $"not ready within {_options.ReadyTimeout!.Value.TotalSeconds:0.#} s");
+                        _runStopStage = await StopCurrentAsync(graceful: false).ConfigureAwait(false);
+                        return;
+                    default:
+                        LogReadyFailed(_logger, failure, _options.Name);
+                        FailRun(generation, RunFailure.NotReady, $"not ready: {failure.Message}");
+                        _runStopStage = await StopCurrentAsync(graceful: false).ConfigureAwait(false);
+                        return;
+                }
+            }
+            finally
+            {
+                if (ReferenceEquals(_startInFlight, started.Task)) _startInFlight = null;
+                started.TrySetResult();
             }
         }
 
