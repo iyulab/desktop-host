@@ -15,8 +15,21 @@ All notable changes to this project are documented here. The format follows
   status it reports — no longer parses the sentence. Migration: `GaveUp += reason => …` keeps compiling where `reason` is only
   logged or interpolated; where it was compared as text, compare `reason.Kind` / `reason.LastRunFailure`.
 
+- **Breaking** — `ProcessSupervisor.Exited` raises an `ExitReport` instead of `(int exitCode, bool willRestart)`: the run's `Pid`,
+  `ExitCode`, `WillRestart`, `Failure` (`RunFailure` — `NotReady` / `Unresponsive` when the supervisor judged the run failed and
+  ended it, `None` when it exited on its own), the `StopStage` that ended it in the first case, and the `Message`. A caller that
+  records a run the supervisor ended (a crash record naming the check, the step that finally stopped it) no longer infers it.
+  Migration: `Exited += (code, restart) => …` becomes `Exited += r => …` with `r.ExitCode` / `r.WillRestart`.
+- A child that exits while `Ready` is waiting for it ends the wait at once — the hook's token is cancelled — and the run is judged
+  by its exit code like any other exit (`IsPermanentExit` applies; `LastRunFailure` is `None`). Before, the wait ran until the hook
+  noticed or `ReadyTimeout` passed, and the run counted as not ready: a long readiness limit held a dead child's start for its
+  whole length, and with `RestartAfterNotReady` off a crash at start-up read as «never ready».
+
 ### Added
 
+- `ProcessSupervisorOptions.OutputEncoding` — how the child's standard output and error are decoded. Unset keeps the platform's
+  choice, which on Windows is the console code page: a child that writes UTF-8 needs `Encoding.UTF8` here, or its non-ASCII text
+  arrives garbled in `StderrLine`, the tail and the log.
 - `RestartPolicy.RestartAfterNotReady` (default on, today's behaviour): off, a run that never became ready — `Ready` failed or
   `ReadyTimeout` passed — is not started again; the supervisor gives up at once with `Permanent` and `NotReady`. For a child
   whose readiness wait is long, or whose caller answers a failed start better than another start would (a rollback after an

@@ -70,6 +70,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
     private string? _runFailure;
     private RunFailure _runFailureKind;
     private int? _exitCodeAtKill;
+    private StopStage? _runStopStage;
 
     /// <summary>Creates a supervisor. Nothing starts until <see cref="StartAsync"/>.</summary>
     /// <exception cref="ArgumentException">A required option is missing or out of range.</exception>
@@ -127,8 +128,8 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
     /// <summary>Raised when <see cref="State"/> changes, with the new state.</summary>
     public event Action<ProcessState>? StateChanged;
 
-    /// <summary>Raised after each unexpected exit, with the exit code and whether a new start is scheduled.</summary>
-    public event Action<int, bool>? Exited;
+    /// <summary>Raised after each unexpected exit, with how the run ended and whether a new start is scheduled.</summary>
+    public event Action<ExitReport>? Exited;
 
     /// <summary>Raised when the supervisor gives up, with the reason (its sentence is also <see cref="LastError"/>).</summary>
     public event Action<GiveUpReason>? GaveUp;
@@ -258,6 +259,8 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = command.WorkingDirectory ?? string.Empty,
+            StandardOutputEncoding = _options.OutputEncoding,
+            StandardErrorEncoding = _options.OutputEncoding,
         };
         foreach (var argument in command.Arguments) psi.ArgumentList.Add(argument);
         psi.Environment.Clear();
@@ -281,6 +284,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         _lastStart = _clock.GetUtcNow();
         _runFailure = null;
         _runFailureKind = RunFailure.None;
+        _runStopStage = null;
         _exitCodeAtKill = null;
         LastError = null;
         Restarts = generation - 1;
@@ -288,15 +292,19 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         LogStarted(_logger, _options.Name, process.Id, generation);
 
         var lifetime = _lifetime.Token;
+        var pid = process.Id;
         _ = PumpStderrAsync(process, generation);
-        _ = WatchExitAsync(process, generation, lifetime);
+        _ = WatchExitAsync(process, pid, generation, lifetime);
 
         if (_options.Ready is { } ready)
         {
             using var timeout = _options.ReadyTimeout is { } limit
                 ? new CancellationTokenSource(limit, _clock)
                 : new CancellationTokenSource();
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime, timeout.Token);
+            using var gone = new CancellationTokenSource();
+            using var readyDone = new CancellationTokenSource();
+            _ = CancelWhenExitedAsync(process, gone, readyDone.Token);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime, timeout.Token, gone.Token);
             try
             {
                 await ready(process, linked.Token).WaitAsync(linked.Token).ConfigureAwait(false);
@@ -312,18 +320,29 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
                 SetState(ProcessState.Stopped);
                 throw;
             }
+            catch (Exception ex) when (HasExited(process))
+            {
+                // The child ended while it was being waited for — the hook saw its pipes close, or the exit cancelled it. That
+                // is an exit, judged by its code once the gate is released; the exit watcher owns it.
+                LogExitedBeforeReady(_logger, ex, _options.Name, generation);
+                return;
+            }
             catch (OperationCanceledException) when (timeout.IsCancellationRequested)
             {
                 FailRun(generation, RunFailure.NotReady, $"not ready within {_options.ReadyTimeout!.Value.TotalSeconds:0.#} s");
-                await StopCurrentAsync(graceful: false).ConfigureAwait(false);
+                _runStopStage = await StopCurrentAsync(graceful: false).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex)
             {
                 LogReadyFailed(_logger, ex, _options.Name);
                 FailRun(generation, RunFailure.NotReady, $"not ready: {ex.Message}");
-                await StopCurrentAsync(graceful: false).ConfigureAwait(false);
+                _runStopStage = await StopCurrentAsync(graceful: false).ConfigureAwait(false);
                 return;
+            }
+            finally
+            {
+                readyDone.Cancel();
             }
         }
 
@@ -382,7 +401,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
                 {
                     if (generation != _generation || State != ProcessState.Running || !ReferenceEquals(_process, process)) return;
                     FailRun(generation, RunFailure.Unresponsive, $"stopped answering: {misses} liveness checks missed in a row");
-                    await StopCurrentAsync(graceful: true).ConfigureAwait(false);
+                    _runStopStage = await StopCurrentAsync(graceful: true).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -435,7 +454,33 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
         }
     }
 
-    private async Task WatchExitAsync(Process process, int generation, CancellationToken lifetime)
+    // Cancels the ready wait's token the moment the child exits; ends when the wait does.
+    private static async Task CancelWhenExitedAsync(Process process, CancellationTokenSource gone, CancellationToken readyDone)
+    {
+        try
+        {
+            await process.WaitForExitAsync(readyDone).ConfigureAwait(false);
+            gone.Cancel();
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException or ObjectDisposedException)
+        {
+            // The wait ended first (or the process was released by a stop); nothing to cancel.
+        }
+    }
+
+    private static bool HasExited(Process process)
+    {
+        try
+        {
+            return process.HasExited;
+        }
+        catch (InvalidOperationException)
+        {
+            return false; // released by a stop: the stop owns its end
+        }
+    }
+
+    private async Task WatchExitAsync(Process process, int pid, int generation, CancellationToken lifetime)
     {
         try
         {
@@ -482,8 +527,8 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
             var restart = !permanent && _consecutiveFailures < delays.Count;
             var cause = _runFailure ?? $"exited with code {code}";
             LogExited(_logger, _options.Name, generation, code, uptime, restart);
-            var willRestart = restart;
-            _pendingEvents.Add(() => Exited?.Invoke(code, willRestart));
+            var report = new ExitReport(pid, code, restart, _runFailureKind, _runFailure is null ? null : _runStopStage, cause);
+            _pendingEvents.Add(() => Exited?.Invoke(report));
 
             if (!restart)
             {
@@ -659,6 +704,9 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Error, Message = "[{Name}] the new process did not become ready")]
     private static partial void LogReadyFailed(ILogger logger, Exception ex, string name);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[{Name}#{Generation}] exited before it was ready")]
+    private static partial void LogExitedBeforeReady(ILogger logger, Exception ex, string name, int generation);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "[{Name}#{Generation}] {Line}")]
     private static partial void LogStderr(ILogger logger, string name, int generation, string line);

@@ -108,7 +108,9 @@ public sealed class ProcessSupervisorOptions
     /// Runs once for each new process, after it starts: bind its standard input and output, then return when it is
     /// ready to be used. The supervisor is <see cref="ProcessState.Running"/> when this returns. If it throws, or does
     /// not return within <see cref="ReadyTimeout"/>, the process is killed and the start counts as a failed run under the
-    /// <see cref="Restart"/> policy. <c>null</c> means a started process is ready.
+    /// <see cref="Restart"/> policy. If the process exits while this runs, the wait ends at once — the hook's token is
+    /// cancelled — and the run is judged by its exit code like any other exit (<see cref="RestartPolicy.IsPermanentExit"/>
+    /// applies), not as a run that was not ready. <c>null</c> means a started process is ready.
     /// </summary>
     public Func<Process, CancellationToken, Task>? Ready { get; set; }
 
@@ -126,6 +128,13 @@ public sealed class ProcessSupervisorOptions
     /// An unresponsive child is stopped the way <see cref="Stop"/> says and counts as a failed run.
     /// </summary>
     public LivenessPolicy? Liveness { get; set; }
+
+    /// <summary>
+    /// How the child's standard output and error are decoded; <c>null</c> (the default) keeps the platform's choice — on
+    /// Windows that is the console's code page, not UTF-8, so a child that writes UTF-8 (a .NET program, most current tools)
+    /// needs <see cref="System.Text.Encoding.UTF8"/> here or its non-ASCII text arrives garbled.
+    /// </summary>
+    public System.Text.Encoding? OutputEncoding { get; set; }
 
     /// <summary>How many of the last standard-error lines to keep for <see cref="ProcessSupervisor.StderrTail"/>. Default 20.</summary>
     public int StderrTailLines { get; set; } = 20;

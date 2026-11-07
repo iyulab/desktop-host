@@ -225,7 +225,7 @@ public sealed class ProcessSupervisorTests
         var exits = new ConcurrentQueue<(int Code, bool WillRestart)>();
         var gaveUp = new TaskCompletionSource<GiveUpReason>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var supervisor = new ProcessSupervisor(Options(() => Child("exit", "3")));
-        supervisor.Exited += (code, restart) => exits.Enqueue((code, restart));
+        supervisor.Exited += r => exits.Enqueue((r.ExitCode, r.WillRestart));
         supervisor.GaveUp += reason => gaveUp.TrySetResult(reason);
 
         await supervisor.StartAsync(TestContext.Current.CancellationToken);
@@ -427,7 +427,7 @@ public sealed class ProcessSupervisorTests
             o.Restart.Delays = [TimeSpan.FromMilliseconds(20)];
             o.Restart.StableAfter = TimeSpan.FromMilliseconds(200);
         }));
-        supervisor.Exited += (_, restart) => { if (restart) Interlocked.Increment(ref restarts); };
+        supervisor.Exited += r => { if (r.WillRestart) Interlocked.Increment(ref restarts); };
 
         await supervisor.StartAsync(TestContext.Current.CancellationToken);
         // One delay allows one restart in a row; three restarts mean each long run reset the count.
@@ -500,6 +500,71 @@ public sealed class ProcessSupervisorTests
         Assert.Equal((GiveUpKind.RestartLimit, RunFailure.NotReady), (reason.Kind, reason.LastRunFailure));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_child_that_exits_while_it_is_awaited_is_judged_by_its_exit_code_not_as_not_ready(bool permanentCode)
+    {
+        var gaveUp = new TaskCompletionSource<GiveUpReason>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reports = new ConcurrentQueue<ExitReport>();
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("exit", "7"), o =>
+        {
+            o.Restart.Delays = [];
+            o.Restart.RestartAfterNotReady = false; // a not-ready verdict would be Permanent + NotReady
+            if (permanentCode) o.Restart.IsPermanentExit = code => code == 7;
+            o.ReadyTimeout = null; // no limit: only the exit can end this wait
+            o.Ready = (_, _) => new TaskCompletionSource().Task; // ignores its token on purpose
+        }));
+        supervisor.GaveUp += reason => gaveUp.TrySetResult(reason);
+        supervisor.Exited += reports.Enqueue;
+
+        await supervisor.StartAsync(TestContext.Current.CancellationToken).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        var reason = await gaveUp.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(permanentCode ? GiveUpKind.Permanent : GiveUpKind.RestartLimit, reason.Kind);
+        Assert.Equal((7, RunFailure.None), (reason.ExitCode, reason.LastRunFailure));
+        Assert.True(reports.TryDequeue(out var report));
+        Assert.Equal((7, false, RunFailure.None, (StopStage?)null), (report.ExitCode, report.WillRestart, report.Failure, report.StopStage));
+    }
+
+    [Fact]
+    public async Task A_run_the_supervisor_ended_is_reported_with_its_failure_and_the_step_that_ended_it()
+    {
+        var probe = new Switch();
+        var report = new TaskCompletionSource<ExitReport>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("ready", "ignore-stop"), o =>
+        {
+            o.Ready = ReadyLine(new ConcurrentQueue<Process>());
+            o.Liveness = Liveness(probe.Probe);
+            o.Restart.Delays = [];
+        }));
+        supervisor.Exited += r => report.TrySetResult(r);
+
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+        var pid = supervisor.Pid!.Value;
+        probe.Alive = false;
+        var r = await report.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(pid, r.Pid);
+        Assert.Equal((RunFailure.Unresponsive, StopStage.Killed, false), (r.Failure, r.StopStage, r.WillRestart));
+        Assert.Contains("liveness checks missed", r.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Output_is_decoded_with_the_encoding_the_options_name()
+    {
+        var lines = new ConcurrentQueue<string>();
+        // The child writes UTF-8; read as Latin-1, «é» (C3 A9) arrives as two characters — proof the option reached the pipe.
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("stderr", "caf\u00e9", "echo"),
+            o => o.OutputEncoding = System.Text.Encoding.Latin1));
+        supervisor.StderrLine += lines.Enqueue;
+
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+        await Eventually(() => !lines.IsEmpty);
+
+        Assert.Equal("caf\u00c3\u00a9", lines.Single());
+    }
+
     [Fact]
     public async Task A_restart_on_request_replaces_the_child_without_counting_an_unexpected_exit()
     {
@@ -525,7 +590,7 @@ public sealed class ProcessSupervisorTests
         var started = new ConcurrentQueue<Process>();
         var exited = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var supervisor = new ProcessSupervisor(Options(() => Child(args), o => o.Ready = ReadyLine(started)));
-        supervisor.Exited += (code, _) => exited.TrySetResult(code);
+        supervisor.Exited += r => exited.TrySetResult(r.ExitCode);
         await supervisor.StartAsync(TestContext.Current.CancellationToken);
         await supervisor.StopAsync(TestContext.Current.CancellationToken);
 

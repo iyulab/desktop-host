@@ -113,7 +113,12 @@ which keeps them from outliving the host.
 - `ProcessSupervisorOptions` — `Command` (resolved at each start; the child gets only the environment it names), `Ready` +
   `ReadyTimeout`, `RestartPolicy` (`Delays`, `StableAfter`, `IsPermanentExit`), `StopPolicy` (`GracefulStop`,
   `GracefulTimeout`, `CloseMainWindow`), `LivenessPolicy` (below), `Guardian` (share one per host), `ChildOutlivesSupervisor`
-  (below), `Logger`, `StderrTailLines`.
+  (below), `OutputEncoding` (how the child's output and error are read — set UTF-8 for a child that writes it; Windows'
+  default is the console code page), `Logger`, `StderrTailLines`. A child that exits while `Ready` waits ends the wait at once
+  and is judged by its exit code, never as «not ready».
+- `Exited` raises an `ExitReport` for each exit the supervisor did not ask for — the run's pid and exit code, whether a new start
+  follows, and, when the supervisor ended the run itself (`RunFailure.NotReady` / `Unresponsive`), the `StopStage` that ended it;
+  `GaveUp` raises a `GiveUpReason` (`Kind`, `ExitCode`, `LastRunFailure`) — values a caller maps onto its own outcomes.
 - `StopAsync` answers a `StopStage` — the step that ended the child: `Graceful` (it left in answer to `GracefulStop`), `CloseWindow`,
   `Killed` (by force), `AlreadyExited` or `NotRunning` — for a caller that records how a stop went.
 - `LivenessPolicy` — for a child that can be alive and still not answer: your check (`Probe` — an HTTP path, a ping on a

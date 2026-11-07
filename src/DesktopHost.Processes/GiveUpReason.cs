@@ -46,3 +46,19 @@ public sealed record GiveUpReason(GiveUpKind Kind, string Message, int? ExitCode
     /// <inheritdoc />
     public override string ToString() => Message;
 }
+
+/// <summary>
+/// How one run of the child ended, for a caller that reports it (a status, a crash record): raised by
+/// <see cref="ProcessSupervisor.Exited"/> after each exit the supervisor did not ask for.
+/// </summary>
+/// <param name="Pid">The process id the run had.</param>
+/// <param name="ExitCode">Its exit code — when the supervisor ended the run, the code the kill left.</param>
+/// <param name="WillRestart">Whether a new start is scheduled.</param>
+/// <param name="Failure">How the supervisor judged the run failed while it ran (and then ended it), or <see cref="RunFailure.None"/> when it exited on its own.</param>
+/// <param name="StopStage">The step that ended it when the supervisor did (<see cref="Failure"/> is not <see cref="RunFailure.None"/>); <c>null</c> otherwise.</param>
+/// <param name="Message">The cause in one sentence.</param>
+public sealed record ExitReport(int Pid, int ExitCode, bool WillRestart, RunFailure Failure, StopStage? StopStage, string Message)
+{
+    /// <inheritdoc />
+    public override string ToString() => Message;
+}

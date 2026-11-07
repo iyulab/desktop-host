@@ -10,6 +10,9 @@
 // With no exit argument the program ends with code 0 after the last argument.
 using System.Diagnostics;
 
+// UTF-8 on every platform (Windows' default is the console code page), so a test can name what the supervisor decodes.
+Console.OutputEncoding = System.Text.Encoding.UTF8;
+
 for (var i = 0; i < args.Length; i++)
 {
     switch (args[i])
