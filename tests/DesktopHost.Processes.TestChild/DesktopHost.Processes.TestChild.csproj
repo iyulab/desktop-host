@@ -7,4 +7,9 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- `supervise`: the test of a child that outlives a starter killed outright runs a real supervisor in this process. -->
+    <ProjectReference Include="..\..\src\DesktopHost.Processes\DesktopHost.Processes.csproj" />
+  </ItemGroup>
+
 </Project>

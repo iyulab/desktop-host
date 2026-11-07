@@ -7,6 +7,8 @@
 //   ignore-stop            like echo, but a "stop" line is answered "no" and ignored
 //   spawn-grandchild       start this program again as `sleep 600000` and print its pid
 //   env <name>             print the variable's value, or "<unset>"
+//   supervise <outlive>    supervise this program run as `sleep 600000` (ChildOutlivesSupervisor = <outlive>, true|false),
+//                          print the supervised child's pid, then wait to be killed
 // With no exit argument the program ends with code 0 after the last argument.
 using System.Diagnostics;
 
@@ -34,6 +36,24 @@ for (var i = 0; i < args.Length; i++)
             Console.WriteLine(Environment.GetEnvironmentVariable(args[++i]) ?? "<unset>");
             Console.Out.Flush();
             break;
+        case "supervise":
+            var outlive = bool.Parse(args[++i]);
+            var me = Environment.ProcessPath!;
+            var childArgs = new List<string>();
+            if (Path.GetFileNameWithoutExtension(me).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+                childArgs.Add(typeof(Program).Assembly.Location);
+            childArgs.AddRange(["sleep", "600000"]);
+            var supervisor = new DesktopHost.Processes.ProcessSupervisor(new DesktopHost.Processes.ProcessSupervisorOptions
+            {
+                Name = "outliving-child",
+                Command = () => new DesktopHost.Processes.SupervisedCommand(me, childArgs, DesktopHost.Processes.SupervisedCommand.SafeEnvironment()),
+                ChildOutlivesSupervisor = outlive,
+            });
+            supervisor.StartAsync().GetAwaiter().GetResult();
+            Console.WriteLine(supervisor.Pid!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            Console.Out.Flush();
+            Thread.Sleep(Timeout.Infinite);
+            return 0;
         case "spawn-grandchild":
             var self = Environment.ProcessPath!;
             var psi = new ProcessStartInfo(self) { UseShellExecute = false, CreateNoWindow = true };

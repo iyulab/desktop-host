@@ -747,6 +747,56 @@ public sealed class ProcessSupervisorTests
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_child_meant_to_outlive_its_supervisor_survives_the_starting_process_being_killed(bool outlives)
+    {
+        // The case ChildOutlivesSupervisor exists for, and the one disposing cannot show: the process that started the child is
+        // killed outright (a crash, a task manager), with no dispose and no stop.
+        if (!outlives && !OperatingSystem.IsWindows())
+            Assert.Skip("only Windows' job object ends a child with its killed owner; elsewhere nothing does");
+        var starter = Process.Start(new ProcessStartInfo(Child().FileName)
+        {
+            ArgumentList = { "supervise", outlives ? "true" : "false" },
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        })!;
+        int childPid;
+        try
+        {
+            var line = await starter.StandardOutput.ReadLineAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
+            childPid = int.Parse(line!, System.Globalization.CultureInfo.InvariantCulture);
+            Assert.False(IsGone(childPid));
+
+            starter.Kill(entireProcessTree: false);
+            await starter.WaitForExitAsync(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            if (!starter.HasExited) starter.Kill(entireProcessTree: true);
+            starter.Dispose();
+        }
+
+        try
+        {
+            if (outlives)
+            {
+                await Task.Delay(500, TestContext.Current.CancellationToken);
+                Assert.False(IsGone(childPid), "the child ended with its starter");
+            }
+            else
+            {
+                await Eventually(() => IsGone(childPid));
+            }
+        }
+        finally
+        {
+            KillQuietly(childPid);
+        }
+    }
+
     [Fact]
     public async Task A_child_left_running_is_not_started_again_when_it_later_exits()
     {
