@@ -444,7 +444,7 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
                     _tail.Enqueue(line);
                     while (_tail.Count > _options.StderrTailLines) _tail.Dequeue();
                 }
-                LogStderr(_logger, _options.Name, generation, line);
+                if (_options.StderrLogLevel != LogLevel.None) LogStderr(_logger, _options.StderrLogLevel, _options.Name, generation, line);
                 StderrLine?.Invoke(line);
             }
         }
@@ -708,8 +708,8 @@ public sealed partial class ProcessSupervisor : IAsyncDisposable
     [LoggerMessage(Level = LogLevel.Warning, Message = "[{Name}#{Generation}] exited before it was ready")]
     private static partial void LogExitedBeforeReady(ILogger logger, Exception ex, string name, int generation);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[{Name}#{Generation}] {Line}")]
-    private static partial void LogStderr(ILogger logger, string name, int generation, string line);
+    [LoggerMessage(Message = "[{Name}#{Generation}] {Line}")]
+    private static partial void LogStderr(ILogger logger, LogLevel level, string name, int generation, string line);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "[{Name}#{Generation}] standard error closed")]
     private static partial void LogStderrEnded(ILogger logger, Exception ex, string name, int generation);

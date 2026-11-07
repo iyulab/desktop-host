@@ -136,6 +136,13 @@ public sealed class ProcessSupervisorOptions
     /// </summary>
     public System.Text.Encoding? OutputEncoding { get; set; }
 
+    /// <summary>
+    /// The level the child's standard-error lines are logged at; default <see cref="Microsoft.Extensions.Logging.LogLevel.Information"/>.
+    /// <see cref="Microsoft.Extensions.Logging.LogLevel.None"/> leaves them to <see cref="ProcessSupervisor.StderrLine"/> and the tail — for a child whose
+    /// standard error is chatty and whose caller sorts the lines itself.
+    /// </summary>
+    public LogLevel StderrLogLevel { get; set; } = LogLevel.Information;
+
     /// <summary>How many of the last standard-error lines to keep for <see cref="ProcessSupervisor.StderrTail"/>. Default 20.</summary>
     public int StderrTailLines { get; set; } = 20;
 

@@ -30,6 +30,8 @@ All notable changes to this project are documented here. The format follows
 - `ProcessSupervisorOptions.OutputEncoding` — how the child's standard output and error are decoded. Unset keeps the platform's
   choice, which on Windows is the console code page: a child that writes UTF-8 needs `Encoding.UTF8` here, or its non-ASCII text
   arrives garbled in `StderrLine`, the tail and the log.
+- `ProcessSupervisorOptions.StderrLogLevel` (default `Information`, as before): the level the child's standard-error lines are
+  logged at; `None` leaves them to `StderrLine` and the tail, for a caller that sorts a chatty child's lines itself.
 - `RestartPolicy.RestartAfterNotReady` (default on, today's behaviour): off, a run that never became ready — `Ready` failed or
   `ReadyTimeout` passed — is not started again; the supervisor gives up at once with `Permanent` and `NotReady`. For a child
   whose readiness wait is long, or whose caller answers a failed start better than another start would (a rollback after an

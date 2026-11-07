@@ -645,6 +645,37 @@ public sealed class ProcessSupervisorTests
         Assert.Equal(["b", "c"], supervisor.StderrTail);
     }
 
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public ConcurrentQueue<(Microsoft.Extensions.Logging.LogLevel Level, string Text)> Entries { get; } = new();
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter) => Entries.Enqueue((logLevel, formatter(state, exception)));
+    }
+
+    [Theory]
+    [InlineData(Microsoft.Extensions.Logging.LogLevel.Debug)]
+    [InlineData(Microsoft.Extensions.Logging.LogLevel.None)]
+    public async Task Standard_error_lines_are_logged_at_the_level_the_options_name(Microsoft.Extensions.Logging.LogLevel level)
+    {
+        var logger = new CapturingLogger();
+        var lines = new ConcurrentQueue<string>();
+        await using var supervisor = new ProcessSupervisor(Options(() => Child("stderr", "chatty", "echo"), o =>
+        {
+            o.Logger = logger;
+            o.StderrLogLevel = level;
+        }));
+        supervisor.StderrLine += lines.Enqueue;
+
+        await supervisor.StartAsync(TestContext.Current.CancellationToken);
+        await Eventually(() => !lines.IsEmpty);
+
+        var logged = logger.Entries.Where(e => e.Text.EndsWith("chatty", StringComparison.Ordinal)).ToArray();
+        if (level == Microsoft.Extensions.Logging.LogLevel.None) Assert.Empty(logged);
+        else Assert.Equal(level, Assert.Single(logged).Level);
+    }
+
     [Fact]
     public async Task A_handler_may_call_back_into_the_supervisor()
     {

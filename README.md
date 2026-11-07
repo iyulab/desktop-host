@@ -114,7 +114,8 @@ which keeps them from outliving the host.
   `ReadyTimeout`, `RestartPolicy` (`Delays`, `StableAfter`, `IsPermanentExit`), `StopPolicy` (`GracefulStop`,
   `GracefulTimeout`, `CloseMainWindow`), `LivenessPolicy` (below), `Guardian` (share one per host), `ChildOutlivesSupervisor`
   (below), `OutputEncoding` (how the child's output and error are read — set UTF-8 for a child that writes it; Windows'
-  default is the console code page), `Logger`, `StderrTailLines`. A child that exits while `Ready` waits ends the wait at once
+  default is the console code page), `Logger`, `StderrLogLevel` (`None` for a chatty child whose lines the caller sorts),
+  `StderrTailLines`. A child that exits while `Ready` waits ends the wait at once
   and is judged by its exit code, never as «not ready».
 - `Exited` raises an `ExitReport` for each exit the supervisor did not ask for — the run's pid and exit code, whether a new start
   follows, and, when the supervisor ended the run itself (`RunFailure.NotReady` / `Unresponsive`), the `StopStage` that ended it;
