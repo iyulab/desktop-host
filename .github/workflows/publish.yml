@@ -66,15 +66,19 @@ jobs:
       if: steps.check_tag.outputs.exists == 'false'
       run: dotnet pack DesktopHost.slnx --no-build --configuration Release --output ./nupkg
 
-    - name: Verify every packable project was produced
+    - name: Verify every packable project was produced, with its license text
       if: steps.check_tag.outputs.exists == 'false'
       run: |
         version="${{ steps.version.outputs.version }}"
         missing=0
         for csproj in $(grep -oP '(?<=Path=")src/[^"]+\.csproj' DesktopHost.slnx); do
           id=$(grep -oP '(?<=<PackageId>)[^<]+' "$csproj" || basename "$csproj" .csproj)
-          if [ ! -f "./nupkg/${id}.${version}.nupkg" ]; then
+          pkg="./nupkg/${id}.${version}.nupkg"
+          if [ ! -f "$pkg" ]; then
             echo "::error::${id}.${version}.nupkg was not produced"
+            missing=1
+          elif ! unzip -Z1 "$pkg" | grep -qx 'LICENSE'; then
+            echo "::error::${id}.${version}.nupkg carries no LICENSE file"
             missing=1
           fi
         done

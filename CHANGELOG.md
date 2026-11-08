@@ -11,6 +11,8 @@ All notable changes to this project are documented here. The format follows
 - Packages are pushed to nuget.org by the organization's central publisher (trusted publishing) instead of with a stored API
   key: the publish workflow builds, tests and packs, hands the packages over as an artifact, and tags the version only after
   the push succeeded — a failed push is retried by re-running the workflow.
+- Every package carries the `LICENSE` text at its root, beside the `MIT` license expression, so an app that lists third-party
+  notices can read it from the restored package; the publish workflow fails a package without it.
 
 ### Changed
 

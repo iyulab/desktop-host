@@ -20,4 +20,10 @@
     <RepositoryUrl>https://github.com/iyulab/desktop-host</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
+
+  <!-- The license text travels inside each package, beside the MIT expression: an app that ships third-party notices reads
+       it from the package it restored rather than from the source repository. -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)LICENSE" Pack="true" PackagePath="" Visible="false" />
+  </ItemGroup>
 </Project>
