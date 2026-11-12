@@ -27,12 +27,13 @@ internal static partial class WindowsRecycleBin
     private static readonly Guid FileOperationClsid = new("3ad05575-8857-4850-9277-11b85bdb8e09");
     private static readonly StrategyBasedComWrappers ComWrappers = new();
 
-    public static void Move(string fullPath)
+    public static TrashedItem Move(string fullPath)
     {
         Exception? failure = null;
+        string? recycled = null;
         var thread = new Thread(() =>
         {
-            try { MoveOnThisThread(fullPath); }
+            try { recycled = MoveOnThisThread(fullPath); }
             catch (Exception ex) { failure = ex; }
         })
         {
@@ -43,9 +44,13 @@ internal static partial class WindowsRecycleBin
         thread.Start();
         thread.Join();
         if (failure is not null) throw failure is TrashException or FileNotFoundException ? failure : Wrap(failure);
+        if (recycled is null)
+            throw new TrashException(TrashException.Refused, "Windows moved the item but did not say where it went in the Recycle Bin.");
+        return new TrashedItem(fullPath, recycled, RecycleBinRecord.Of(recycled));
     }
 
-    private static void MoveOnThisThread(string fullPath)
+
+    private static string? MoveOnThisThread(string fullPath)
     {
         var operation = Create<IFileOperation>(FileOperationClsid, typeof(IFileOperation).GUID);
         var item = ShellItem(fullPath);
@@ -69,6 +74,7 @@ internal static partial class WindowsRecycleBin
                     "The item can't go to the Recycle Bin (it may be too large, or its drive has no Recycle Bin), so it was not deleted.");
             if (aborted || File.Exists(fullPath) || Directory.Exists(fullPath))
                 throw new TrashException(TrashException.Refused, "Windows did not move the item to the Recycle Bin.");
+            return sink.Recycled;
         }
         finally
         {
@@ -126,6 +132,11 @@ internal sealed partial class RecycleOnlySink : IFileOperationProgressSink
 
     public bool RefusedPermanentDelete { get; private set; }
 
+    /// <summary>Where the shell put the item in the Recycle Bin (its file-system path), from <c>PostDeleteItem</c>.</summary>
+    public string? Recycled { get; private set; }
+
+    private const uint SigdnFileSysPath = 0x80058000;
+
     public int PreDeleteItem(uint dwFlags, nint psiItem)
     {
         if ((dwFlags & WindowsRecycleBin.TsfDeleteRecycleIfPossible) != 0) return SOk;
@@ -141,13 +152,34 @@ internal sealed partial class RecycleOnlySink : IFileOperationProgressSink
     public int PostMoveItem(uint dwFlags, nint psiItem, nint psiDestinationFolder, nint pszNewName, int hrMove, nint psiNewlyCreated) => SOk;
     public int PreCopyItem(uint dwFlags, nint psiItem, nint psiDestinationFolder, nint pszNewName) => SOk;
     public int PostCopyItem(uint dwFlags, nint psiItem, nint psiDestinationFolder, nint pszNewName, int hrCopy, nint psiNewlyCreated) => SOk;
-    public int PostDeleteItem(uint dwFlags, nint psiItem, int hrDelete, nint psiNewlyCreated) => SOk;
+    public int PostDeleteItem(uint dwFlags, nint psiItem, int hrDelete, nint psiNewlyCreated)
+    {
+        if (hrDelete >= 0 && psiNewlyCreated != 0) Recycled = PathOf(psiNewlyCreated);
+        return SOk;
+    }
+
+    /// <summary>The file-system path of a shell item the shell passed in (borrowed — not released here).</summary>
+    private static string? PathOf(nint shellItem)
+    {
+        var item = (IShellItem)ComWrappersHolder.Instance.GetOrCreateObjectForComInstance(shellItem, CreateObjectFlags.None);
+        item.GetDisplayName(SigdnFileSysPath, out var name);
+        if (name == 0) return null;
+        try { return Marshal.PtrToStringUni(name); }
+        finally { Marshal.FreeCoTaskMem(name); }
+    }
     public int PreNewItem(uint dwFlags, nint psiDestinationFolder, nint pszNewName) => SOk;
     public int PostNewItem(uint dwFlags, nint psiDestinationFolder, nint pszNewName, nint pszTemplateName, uint dwFileAttributes, int hrNew, nint psiNewItem) => SOk;
     public int UpdateProgress(uint iWorkTotal, uint iWorkSoFar) => SOk;
     public int ResetTimer() => SOk;
     public int PauseTimer() => SOk;
     public int ResumeTimer() => SOk;
+}
+
+/// <summary>The one COM wrapper strategy for the shell objects the sink receives.</summary>
+[SupportedOSPlatform("windows")]
+internal static class ComWrappersHolder
+{
+    public static readonly StrategyBasedComWrappers Instance = new();
 }
 
 /// <summary><c>IFileOperation</c> (shobjidl_core.h) — every member in vtable order; the ones not called take raw pointers.</summary>

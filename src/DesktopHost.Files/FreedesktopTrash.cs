@@ -22,7 +22,7 @@ internal static class FreedesktopTrash
     /// Moves <paramref name="fullPath"/> into <paramref name="trash"/>: the record is written first (created exclusively, which
     /// also claims the name), then the item renamed into <c>files/</c> under the same name; a failed rename removes the record.
     /// </summary>
-    public static void Move(string fullPath, string trash)
+    public static TrashedItem Move(string fullPath, string trash)
     {
         var files = Path.Combine(trash, "files");
         var info = Path.Combine(trash, "info");
@@ -52,7 +52,7 @@ internal static class FreedesktopTrash
             {
                 if (Directory.Exists(fullPath)) Directory.Move(fullPath, target);
                 else File.Move(fullPath, target);
-                return;
+                return new TrashedItem(fullPath, target, infoPath);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -62,6 +62,16 @@ internal static class FreedesktopTrash
                 throw new TrashException(TrashException.Refused, "The item could not be moved to the trash.", ex);
             }
         }
+    }
+
+    /// <summary>Whether <paramref name="item"/> sits in <paramref name="trash"/>'s <c>files/</c> with its record in <c>info/</c>.</summary>
+    public static bool Holds(string trash, TrashedItem item)
+    {
+        var files = Path.Combine(trash, "files");
+        var info = Path.Combine(trash, "info");
+        return string.Equals(Path.GetDirectoryName(item.TrashPath), files, StringComparison.Ordinal)
+            && item.RecordPath is { } record
+            && string.Equals(record, Path.Combine(info, Path.GetFileName(item.TrashPath) + ".trashinfo"), StringComparison.Ordinal);
     }
 
     /// <summary>The <c>.trashinfo</c> record: the original path, percent-encoded as the specification asks, and the local time.</summary>

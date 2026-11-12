@@ -14,7 +14,20 @@ All notable changes to this project are documented here. The format follows
 - Every package carries the `LICENSE` text at its root, beside the `MIT` license expression, so an app that lists third-party
   notices can read it from the restored package; the publish workflow fails a package without it.
 
+### Added
+
+- `Trash.PutBack(TrashedItem)` — the undo of a move to the trash, as File Explorer's and Finder's Undo: the item goes back to where it
+  was (a folder that held it and has since gone is made again) and the trash's own record of it is removed (the Recycle Bin's `$I`
+  file, the `.trashinfo` record). Something at the original place now keeps the item in the trash (`TrashException.Occupied`, new);
+  an item no longer in the trash is `FileNotFoundException`; a handle whose place is not inside a trash is refused, since a put-back
+  moves a file to the path the handle names.
+
 ### Changed
+
+- **Breaking** — `Trash.Move` returns a `TrashedItem` (`OriginalPath`, `TrashPath` — where the platform put it — and `RecordPath`, the
+  trash's record beside it where the platform keeps one) instead of nothing. On Windows the place comes from the shell's own report of
+  the recycled item; on macOS from the system's move; on Linux it is the home trash's `files/` entry. Migration: a call that ignores
+  the result keeps compiling; keep the result to offer an undo.
 
 - **Breaking** — `ProcessSupervisor.GaveUp` raises a `GiveUpReason` instead of a string: `Kind` (`NoCommand`, `StartFailed`,
   `Permanent`, `RestartLimit`), the last run's `ExitCode`, and `LastRunFailure` (`None`, `NotReady`, `Unresponsive` — how the

@@ -128,6 +128,103 @@ public sealed class TrashTests : IDisposable
             record);
     }
 
+    // --- putting an item back (the undo of a move to the trash) ---
+
+    [Fact]
+    public void A_file_put_back_is_where_it_was_with_its_content_and_its_record_is_gone()
+    {
+        var trash = Path.Combine(_root, "Trash");
+        var item = Path.Combine(_root, "work", "a report.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(item)!);
+        File.WriteAllText(item, "content");
+
+        var trashed = FreedesktopTrash.Move(item, trash);
+        Assert.Equal(item, trashed.OriginalPath);
+        Assert.Equal(Path.Combine(trash, "files", "a report.txt"), trashed.TrashPath);
+        Assert.Equal(Path.Combine(trash, "info", "a report.txt.trashinfo"), trashed.RecordPath);
+
+        Trash.PutBack(trashed, t => FreedesktopTrash.Holds(trash, t));
+
+        Assert.Equal("content", File.ReadAllText(item));
+        Assert.False(File.Exists(trashed.TrashPath));
+        Assert.False(File.Exists(trashed.RecordPath));
+    }
+
+    [Fact]
+    public void A_folder_is_put_back_whole_and_a_folder_that_held_it_and_went_is_made_again()
+    {
+        var trash = Path.Combine(_root, "Trash");
+        var folder = Path.Combine(_root, "projects", "photos");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "p.jpg"), "x");
+
+        var trashed = FreedesktopTrash.Move(folder, trash);
+        Directory.Delete(Path.Combine(_root, "projects"));
+
+        Trash.PutBack(trashed, t => FreedesktopTrash.Holds(trash, t));
+
+        Assert.Equal("x", File.ReadAllText(Path.Combine(folder, "p.jpg")));
+    }
+
+    [Fact]
+    public void Something_at_the_original_place_keeps_the_item_in_the_trash_and_says_so()
+    {
+        var trash = Path.Combine(_root, "Trash");
+        var item = Path.Combine(_root, "notes.md");
+        File.WriteAllText(item, "old");
+        var trashed = FreedesktopTrash.Move(item, trash);
+        File.WriteAllText(item, "new");
+
+        var refused = Assert.Throws<TrashException>(() => Trash.PutBack(trashed, t => FreedesktopTrash.Holds(trash, t)));
+
+        Assert.Equal(TrashException.Occupied, refused.Reason);
+        Assert.Equal("new", File.ReadAllText(item));
+        Assert.Equal("old", File.ReadAllText(trashed.TrashPath));
+    }
+
+    [Fact]
+    public void An_item_no_longer_in_the_trash_is_not_found_and_a_handle_outside_a_trash_is_refused()
+    {
+        var trash = Path.Combine(_root, "Trash");
+        var item = Path.Combine(_root, "gone.txt");
+        File.WriteAllText(item, "x");
+        var trashed = FreedesktopTrash.Move(item, trash);
+        File.Delete(trashed.TrashPath);   // the trash was emptied
+
+        Assert.Throws<FileNotFoundException>(() => Trash.PutBack(trashed, t => FreedesktopTrash.Holds(trash, t)));
+
+        // A handle naming an ordinary file is not a trash item: a put-back would move any file to any path.
+        var ordinary = Path.Combine(_root, "ordinary.txt");
+        File.WriteAllText(ordinary, "x");
+        Assert.Throws<ArgumentException>(() => Trash.PutBack(new TrashedItem(Path.Combine(_root, "elsewhere.txt"), ordinary, null)));
+        Assert.True(File.Exists(ordinary));
+    }
+
+    [Fact]
+    public void On_a_Mac_a_file_moved_to_the_Trash_is_put_back_by_the_public_calls()
+    {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "the macOS Trash");
+        var item = Path.Combine(_root, "work", "undo me " + Guid.NewGuid().ToString("N") + ".txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(item)!);
+        File.WriteAllText(item, "content");
+
+        var trashed = Trash.Move(item);
+        Assert.False(File.Exists(item));
+        Assert.Null(trashed.RecordPath);
+
+        Trash.PutBack(trashed);
+
+        Assert.Equal("content", File.ReadAllText(item));
+        Assert.False(File.Exists(trashed.TrashPath));
+    }
+
+    [Fact]
+    public void The_Recycle_Bin_record_is_the_I_file_beside_the_R_file()
+    {
+        Assert.Equal(Path.Combine("bin", "$IAB12CD.txt"), RecycleBinRecord.Of(Path.Combine("bin", "$RAB12CD.txt")));
+        Assert.Null(RecycleBinRecord.Of(Path.Combine("bin", "plain.txt")));
+    }
+
     // --- the Recycle Bin (Windows) ---
 
     // Opt-in: every run leaves its two items in this account's real Recycle Bin, and emptying it is the person's to do. Run it
@@ -142,11 +239,19 @@ public sealed class TrashTests : IDisposable
         Directory.CreateDirectory(folder);
         File.WriteAllText(Path.Combine(folder, "inside.txt"), "y");
 
-        Trash.Move(file);
-        Trash.Move(folder);
+        var trashedFile = Trash.Move(file);
+        var trashedFolder = Trash.Move(folder);
 
         Assert.False(File.Exists(file));
         Assert.False(Directory.Exists(folder));
+        Assert.Contains(@"\$Recycle.Bin\", trashedFile.TrashPath, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(trashedFile.RecordPath), "the $I record sits beside the $R item");
+
+        Trash.PutBack(trashedFile);
+        Trash.PutBack(trashedFolder);
+        Assert.Equal("x", File.ReadAllText(file));
+        Assert.Equal("y", File.ReadAllText(Path.Combine(folder, "inside.txt")));
+        Assert.False(File.Exists(trashedFile.RecordPath));
     }
 
     [Fact]
