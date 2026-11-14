@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Files**: a shared read (`ReadAllTextShared`, `ReadLinesShared` and their `IfExists` / async forms) waits out the moment a replace
+  refuses it. On Windows an open of a file that is being replaced can be refused — access denied while the old file is delete-pending,
+  or a sharing violation — although the file is there before and after; a reader took it for an unreadable file. The refusal is now
+  retried within the replace's own two-second window. Absence is still answered at once, and a refusal that outlasts the window is
+  thrown as it came (a file held exclusively for longer now throws after that window rather than at once).
+
 ### Build
 
 - Packages are pushed to nuget.org by the organization's central publisher (trusted publishing) instead of with a stored API

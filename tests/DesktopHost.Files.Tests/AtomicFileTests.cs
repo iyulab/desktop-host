@@ -377,4 +377,53 @@ public sealed class AtomicFileTests : IDisposable
         Assert.Throws<IOException>(() => AtomicFile.ReadAllTextSharedIfExists(path));
         await Assert.ThrowsAsync<IOException>(() => AtomicFile.ReadAllTextSharedIfExistsAsync(path));
     }
+
+    [Fact]
+    public async Task A_reader_racing_the_replace_always_reads_one_whole_document()
+    {
+        // On Windows the rename that replaces a file leaves the old one delete-pending for a moment, and an open of the name in
+        // that moment is refused as access denied — a reader took a file that is there before and after for an unreadable one.
+        // Rare: four readers on their own threads against 1,500 replaces give it room to happen.
+        var path = Path.Combine(_dir, "budget.json");
+        var documents = new[] { new string('a', 4_000), new string('b', 4_000) };
+        AtomicFile.WriteAllText(path, documents[0]);
+        var stop = 0;
+        var reads = 0;
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        var readers = Enumerable.Range(0, 4).Select(_ => new Thread(() =>
+        {
+            while (Volatile.Read(ref stop) == 0)
+            {
+                try
+                {
+                    var text = AtomicFile.ReadAllTextSharedIfExists(path);
+                    if (text is null || !documents.Contains(text)) failures.Enqueue(new InvalidDataException($"read {(text is null ? "nothing" : text.Length + " chars")}"));
+                    Interlocked.Increment(ref reads);
+                }
+                catch (Exception ex) { failures.Enqueue(ex); }
+            }
+        }) { IsBackground = true }).ToList();
+        readers.ForEach(t => t.Start());
+        for (var round = 0; round < 1_500; round++) AtomicFile.WriteAllText(path, documents[round % 2]);
+        Volatile.Write(ref stop, 1);
+        readers.ForEach(t => t.Join());
+
+        Assert.True(reads > 0);
+        Assert.True(failures.IsEmpty, string.Join(" | ", failures.Take(3).Select(f => $"{f.GetType().Name}: {f.Message}")) + $" ({failures.Count} of {reads})");
+        await Task.CompletedTask;
+    }
+
+    [Theory]
+    [InlineData(typeof(UnauthorizedAccessException), 0, true)]
+    [InlineData(typeof(IOException), unchecked((int)0x80070020), true)]   // sharing violation
+    [InlineData(typeof(IOException), unchecked((int)0x8007012F), true)]   // delete pending
+    [InlineData(typeof(IOException), unchecked((int)0x80070070), false)]  // disk full: not a moment's refusal
+    [InlineData(typeof(FileNotFoundException), unchecked((int)0x80070002), false)]   // absence is an answer
+    public void Only_a_moments_refusal_is_waited_out(Type type, int hresult, bool waited)
+    {
+        var ex = (Exception)Activator.CreateInstance(type, "refused")!;
+        ex.HResult = hresult;
+        Assert.Equal(waited, AtomicFile.RefusedDuringSwap(ex));
+    }
 }
+

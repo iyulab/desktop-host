@@ -78,8 +78,7 @@ public static class AtomicFile
     /// <returns>The file's text; the encoding is detected from a byte order mark, UTF-8 otherwise.</returns>
     public static string ReadAllTextShared(string path)
     {
-        using var stream = new FileStream(
-            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize: 4096, FileOptions.SequentialScan);
+        using var stream = OpenShared(path, FileOptions.SequentialScan);
         using var reader = new StreamReader(stream, detectEncodingFromByteOrderMarks: true);
         return reader.ReadToEnd();
     }
@@ -146,8 +145,7 @@ public static class AtomicFile
     /// <param name="path">The file to read.</param>
     /// <returns>The lines, read lazily; the file is opened at the call and closed when enumeration ends.</returns>
     public static IEnumerable<string> ReadLinesShared(string path)
-        => Lines(new FileStream(
-            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize: 4096, FileOptions.SequentialScan));
+        => Lines(OpenShared(path, FileOptions.SequentialScan));
 
     /// <inheritdoc cref="ReadLinesShared"/>
     /// <param name="path">The file to read.</param>
@@ -168,8 +166,7 @@ public static class AtomicFile
         FileStream stream;
         try
         {
-            stream = new FileStream(
-                path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize: 4096, FileOptions.SequentialScan);
+            stream = OpenShared(path, FileOptions.SequentialScan);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -197,9 +194,29 @@ public static class AtomicFile
         return LinesAsync(stream, ct);
     }
 
-    private static FileStream OpenAsyncRead(string path) => new(
-        path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
-        bufferSize: 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
+    private static FileStream OpenAsyncRead(string path) => OpenShared(path, FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+    // Every shared read opens here. On Windows the rename that replaces a file leaves the old one delete-pending for a moment,
+    // and an open of the name in that moment is refused (access denied, or delete pending) although the file is there before
+    // and after: a reader racing WriteAllText took a present file for an unreadable one. That refusal is waited out within the
+    // swap's own window; absence is not (it is an answer), and a refusal that outlasts the window is thrown as it came.
+    private static FileStream OpenShared(string path, FileOptions options)
+    {
+        FileStream? stream = null;
+        var started = Stopwatch.GetTimestamp();
+        FileRetry.Patiently(
+            () => stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize: 4096, options),
+            SwapPatience, SwapPauseAfter, RefusedDuringSwap, () => Stopwatch.GetElapsedTime(started), Thread.Sleep);
+        return stream!;
+    }
+
+    private const int ErrorSharingViolation = unchecked((int)0x80070020);
+    private const int ErrorDeletePending = unchecked((int)0x8007012F);
+
+    internal static bool RefusedDuringSwap(Exception ex)
+        => ex is UnauthorizedAccessException
+           || (ex is IOException io && io is not FileNotFoundException and not DirectoryNotFoundException
+               && io.HResult is ErrorSharingViolation or ErrorDeletePending);
 
     // The iterators own the stream they are handed and dispose of it when enumeration ends or is abandoned.
     private static IEnumerable<string> Lines(FileStream stream)
