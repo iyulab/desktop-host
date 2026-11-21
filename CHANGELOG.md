@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-21
+
 ### Build
 
 - Packages are pushed to nuget.org by the organization's central publisher (trusted publishing) instead of with a stored API
