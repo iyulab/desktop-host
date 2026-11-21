@@ -40,6 +40,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `FileNames` (DesktopHost.Files): names that differ only in Unicode normalization form are one name. `AreSame` compares two
+  names once both are composed (case as the caller says); `FindEntry(directory, name)` returns the entry a typed name means, spelled
+  as the directory lists it (an exact spelling first, else the one entry with the same composed name; none when two entries differ
+  only in form); `ResolvePath` does that for every segment of a path. A volume that compares code points (NTFS, ext4, a network
+  share) does not open a decomposed name by its composed spelling, and a change notification reports the stored spelling — so a
+  caller that opens, moves or records a typed path resolves it first.
 - `ProcessSupervisorOptions.OutputEncoding` — how the child's standard output and error are decoded. Unset keeps the platform's
   choice, which on Windows is the console code page: a child that writes UTF-8 needs `Encoding.UTF8` here, or its non-ASCII text
   arrives garbled in `StderrLine`, the tail and the log.
