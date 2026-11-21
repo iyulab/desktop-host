@@ -126,8 +126,8 @@ public sealed class AtomicFileTests : IDisposable
 
         await AtomicFile.WriteAllTextAsync(path, "new instructions\n");
 
-        var first = await Task.WhenAny(heard.Task, Task.Delay(TimeSpan.FromSeconds(10)));
-        Assert.Same(heard.Task, first);
+        // No event within 10 s fails the test with a TimeoutException; the wait ends with the event, leaving no timer behind.
+        await heard.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         // Which event arrives is the platform's business (a rename onto the name on Windows, the new name arriving on
         // Linux); that an event about the name is raised at all is the contract.
         Assert.Contains("instructions.md", await heard.Task, StringComparison.Ordinal);
