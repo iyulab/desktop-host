@@ -27,7 +27,7 @@ public sealed class FileRetryWindowTests
     }
 
     private static JsonElement Table() =>
-        JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "cases", "file-retry.json"))).RootElement;
+        JsonElement.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "cases", "file-retry.json")));
 
     private static Func<int, TimeSpan> PauseAfter(string schedule) => schedule == "swap"
         ? AtomicFile.SwapPauseAfter
