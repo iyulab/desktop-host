@@ -1,0 +1,44 @@
+name: CI
+
+# Build and test every pushed branch and pull request, so a topic branch has a check result for its head before it is merged.
+# Linux and Windows: several primitives (the recycle bin, process trees, file locks) behave per platform. Publishing stays in
+# publish.yml (a version change on main); this workflow uploads nothing.
+on:
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Build
+      run: dotnet build DesktopHost.slnx --configuration Release
+
+    - name: Test
+      run: dotnet test --solution DesktopHost.slnx --no-build --configuration Release
