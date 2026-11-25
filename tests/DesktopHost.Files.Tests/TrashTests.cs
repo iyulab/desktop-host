@@ -26,6 +26,26 @@ public sealed class TrashTests : IDisposable
         Assert.Throws<FileNotFoundException>(() => Trash.Move(Path.Combine(_root, "never-made.txt")));
     }
 
+    [Fact]
+    public void A_move_cancelled_before_it_starts_throws_and_leaves_the_item()
+    {
+        var item = Path.Combine(_root, "keep.txt");
+        File.WriteAllText(item, "x");
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+
+        Assert.ThrowsAny<OperationCanceledException>(() => Trash.Move(item, progress: null, cancel.Token));
+        Assert.True(File.Exists(item));
+    }
+
+    [Fact]
+    public void The_share_done_is_a_ratio_and_zero_while_the_total_is_unknown()
+    {
+        Assert.Equal(0, new TrashProgress(5, 0).Fraction);
+        Assert.Equal(0.25, new TrashProgress(1, 4).Fraction);
+        Assert.Equal(1, new TrashProgress(9, 4).Fraction);
+    }
+
     // --- the macOS Trash (the system's own move, so it runs on a Mac only) ---
 
     [Fact]
@@ -50,6 +70,20 @@ public sealed class TrashTests : IDisposable
             try { File.Delete(landed); }
             catch (IOException) { /* the Trash is the person's; one file of the test left in it is no harm */ }
         }
+    }
+
+    [Fact]
+    public void On_a_Mac_the_progress_reports_the_start_and_the_whole()
+    {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "the macOS Trash");
+        var item = Path.Combine(_root, "progress " + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(item, "x");
+        var seen = new List<TrashProgress>();
+
+        Trash.Move(item, new SynchronousProgress(seen.Add));
+
+        Assert.Equal([new TrashProgress(0, 1), new TrashProgress(1, 1)], seen);
+        Assert.False(File.Exists(item));
     }
 
     [Fact]
@@ -161,4 +195,63 @@ public sealed class TrashTests : IDisposable
         Assert.Equal(unchecked((int)0x80004004), sink.PreDeleteItem(0, 0));
         Assert.True(sink.RefusedPermanentDelete, "a delete the shell would not recycle is refused, never let through");
     }
+
+    [Fact]
+    public void The_sink_counts_the_walk_passes_the_shells_counts_on_and_aborts_at_its_next_report_once_cancelled()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var seen = new List<TrashProgress>();
+        using var cancel = new CancellationTokenSource();
+        var sink = new RecycleOnlySink(new SynchronousProgress(seen.Add), cancel.Token);
+
+        Assert.Equal(0, sink.UpdateProgress(0, 0));
+        Assert.Equal(0, sink.UpdateProgress(0, 0));
+        Assert.Equal(0, sink.UpdateProgress(100, 40));
+        Assert.Equal(0, sink.PostDeleteItem(0, 0, 0, 0));
+        cancel.Cancel();
+        Assert.Equal(unchecked((int)0x80004004), sink.UpdateProgress(100, 41));
+        Assert.Equal(unchecked((int)0x80004004), sink.PreDeleteItem(WindowsRecycleBin.TsfDeleteRecycleIfPossible, 0));
+
+        Assert.True(sink.Cancelled);
+        Assert.False(sink.RefusedPermanentDelete, "a cancel is not a refused permanent delete");
+        Assert.Equal([new TrashProgress(1, 0), new TrashProgress(2, 0), new TrashProgress(40, 100), new TrashProgress(41, 100)], seen);
+    }
+
+    // Opt-in like the test above. The shell walks a folder's items before it moves it: the walk is reported item by item with the
+    // total still 0, a cancel during it leaves the folder whole where it was, and a move left alone ends on a report of the whole.
+    [Fact]
+    public void On_Windows_a_folder_of_many_files_reports_its_walk_and_a_cancel_during_it_leaves_the_folder_whole()
+    {
+        if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("DESKTOPHOST_TRASH_LIVE") != "1") return;
+        string Many(string name)
+        {
+            var folder = Path.Combine(_root, name);
+            Directory.CreateDirectory(folder);
+            for (var i = 0; i < 3000; i++) File.WriteAllText(Path.Combine(folder, $"f{i}.txt"), "x");
+            return folder;
+        }
+
+        var stopped = Many("stopped");
+        var seen = new List<TrashProgress>();
+        using var cancel = new CancellationTokenSource();
+        Assert.ThrowsAny<OperationCanceledException>(() => Trash.Move(stopped, new SynchronousProgress(p =>
+        {
+            seen.Add(p);
+            if (seen.Count == 100) cancel.Cancel();
+        }), cancel.Token));
+        Assert.True(seen.Take(100).All(p => p.WorkTotal == 0) && seen[99].WorkDone == 100, "the walk counts the items it has seen, the total still unknown");
+        Assert.Equal(3000, Directory.GetFiles(stopped).Length);
+
+        var moved = Many("moved");
+        var reports = new List<TrashProgress>();
+        Trash.Move(moved, new SynchronousProgress(reports.Add));
+        Assert.False(Directory.Exists(moved));
+        Assert.True(reports[^1].WorkTotal > 0 && reports[^1].Fraction == 1, "the move ends on the whole");
+    }
+}
+
+/// <summary>An <see cref="IProgress{T}"/> that reports on the caller's thread (the standard one posts to a context).</summary>
+internal sealed class SynchronousProgress(Action<TrashProgress> report) : IProgress<TrashProgress>
+{
+    public void Report(TrashProgress value) => report(value);
 }

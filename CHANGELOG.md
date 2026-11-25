@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `Trash.Move(path, progress, cancellationToken)` — a move to the trash that reports how far it has come (`TrashProgress`: work done
+  of the total, in the platform's units, with `Fraction`) and stops when cancelled. On Windows the shell first walks a folder's every
+  item — seconds per few thousand files, minutes for hundreds of thousands — then moves it; the walk is reported item by item (the
+  total still 0) and a cancel during it leaves the folder where it was, whole. On macOS and Linux the move is one step: progress is
+  reported at its start and end, and a cancel is taken before it starts. `Trash.Move(path)` is unchanged.
+
 ## [0.8.0] - 2026-11-21
 
 ### Build

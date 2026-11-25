@@ -27,12 +27,12 @@ internal static partial class WindowsRecycleBin
     private static readonly Guid FileOperationClsid = new("3ad05575-8857-4850-9277-11b85bdb8e09");
     private static readonly StrategyBasedComWrappers ComWrappers = new();
 
-    public static void Move(string fullPath)
+    public static void Move(string fullPath, IProgress<TrashProgress>? progress, CancellationToken cancellationToken)
     {
         Exception? failure = null;
         var thread = new Thread(() =>
         {
-            try { MoveOnThisThread(fullPath); }
+            try { MoveOnThisThread(fullPath, progress, cancellationToken); }
             catch (Exception ex) { failure = ex; }
         })
         {
@@ -42,14 +42,15 @@ internal static partial class WindowsRecycleBin
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         thread.Join();
-        if (failure is not null) throw failure is TrashException or FileNotFoundException ? failure : Wrap(failure);
+        if (failure is not null)
+            throw failure is TrashException or FileNotFoundException or OperationCanceledException ? failure : Wrap(failure);
     }
 
-    private static void MoveOnThisThread(string fullPath)
+    private static void MoveOnThisThread(string fullPath, IProgress<TrashProgress>? progress, CancellationToken cancellationToken)
     {
         var operation = Create<IFileOperation>(FileOperationClsid, typeof(IFileOperation).GUID);
         var item = ShellItem(fullPath);
-        var sink = new RecycleOnlySink();
+        var sink = new RecycleOnlySink(progress, cancellationToken);
         operation.SetOperationFlags(FofNoUi | FofAllowUndo | FofxRecycleOnDelete | FofxAddUndoRecord | FofxEarlyFailure);
         operation.Advise(sink, out var cookie);
         try
@@ -59,11 +60,14 @@ internal static partial class WindowsRecycleBin
             {
                 operation.PerformOperations();
             }
-            catch (COMException) when (sink.RefusedPermanentDelete)
+            catch (COMException) when (sink.RefusedPermanentDelete || sink.Cancelled)
             {
                 // The sink's abort surfaces as a cancelled operation — the reason is below.
             }
             operation.GetAnyOperationsAborted(out var aborted);
+            // A cancel that arrived after the shell had moved the item changes nothing: it is in the Recycle Bin.
+            if (sink.Cancelled && (File.Exists(fullPath) || Directory.Exists(fullPath)))
+                throw new OperationCanceledException("The move to the Recycle Bin was cancelled.", cancellationToken);
             if (sink.RefusedPermanentDelete)
                 throw new TrashException(TrashException.NotRecyclable,
                     "The item can't go to the Recycle Bin (it may be too large, or its drive has no Recycle Bin), so it was not deleted.");
@@ -115,22 +119,45 @@ internal static partial class WindowsRecycleBin
 
 /// <summary>
 /// Refuses a deletion the shell would not recycle (<c>PreDeleteItem</c> without <see cref="WindowsRecycleBin.TsfDeleteRecycleIfPossible"/>):
-/// with recycling requested and no UI, the shell otherwise deletes such an item permanently.
+/// with recycling requested and no UI, the shell otherwise deletes such an item permanently. Passes the shell's progress on, and aborts
+/// the operation at the shell's next report once <c>cancellationToken</c> is cancelled.
 /// </summary>
 [GeneratedComClass]
 [SupportedOSPlatform("windows")]
-internal sealed partial class RecycleOnlySink : IFileOperationProgressSink
+internal sealed partial class RecycleOnlySink(IProgress<TrashProgress>? progress = null, CancellationToken cancellationToken = default)
+    : IFileOperationProgressSink
 {
     private const int SOk = 0;
     private const int EAbort = unchecked((int)0x80004004);
 
     public bool RefusedPermanentDelete { get; private set; }
 
+    /// <summary>The operation was aborted because the caller cancelled it.</summary>
+    public bool Cancelled { get; private set; }
+
+    private int GoOn()
+    {
+        if (!cancellationToken.IsCancellationRequested) return SOk;
+        Cancelled = true;
+        return EAbort;
+    }
+
     public int PreDeleteItem(uint dwFlags, nint psiItem)
     {
+        if (GoOn() != SOk) return EAbort;
         if ((dwFlags & WindowsRecycleBin.TsfDeleteRecycleIfPossible) != 0) return SOk;
         RefusedPermanentDelete = true;
         return EAbort;
+    }
+
+    private long _walked;
+
+    // While it walks a folder before the move the shell calls this once per item with nothing counted (0 of 0); those calls are
+    // counted here, so the walk reads as items seen. Once it knows the total, its own counts are passed on.
+    public int UpdateProgress(uint iWorkTotal, uint iWorkSoFar)
+    {
+        progress?.Report(iWorkTotal == 0 ? new TrashProgress(++_walked, 0) : new TrashProgress(iWorkSoFar, iWorkTotal));
+        return GoOn();
     }
 
     public int StartOperations() => SOk;
@@ -141,10 +168,9 @@ internal sealed partial class RecycleOnlySink : IFileOperationProgressSink
     public int PostMoveItem(uint dwFlags, nint psiItem, nint psiDestinationFolder, nint pszNewName, int hrMove, nint psiNewlyCreated) => SOk;
     public int PreCopyItem(uint dwFlags, nint psiItem, nint psiDestinationFolder, nint pszNewName) => SOk;
     public int PostCopyItem(uint dwFlags, nint psiItem, nint psiDestinationFolder, nint pszNewName, int hrCopy, nint psiNewlyCreated) => SOk;
-    public int PostDeleteItem(uint dwFlags, nint psiItem, int hrDelete, nint psiNewlyCreated) => SOk;
+    public int PostDeleteItem(uint dwFlags, nint psiItem, int hrDelete, nint psiNewlyCreated) => GoOn();
     public int PreNewItem(uint dwFlags, nint psiDestinationFolder, nint pszNewName) => SOk;
     public int PostNewItem(uint dwFlags, nint psiDestinationFolder, nint pszNewName, nint pszTemplateName, uint dwFileAttributes, int hrNew, nint psiNewItem) => SOk;
-    public int UpdateProgress(uint iWorkTotal, uint iWorkSoFar) => SOk;
     public int ResetTimer() => SOk;
     public int PauseTimer() => SOk;
     public int ResumeTimer() => SOk;
